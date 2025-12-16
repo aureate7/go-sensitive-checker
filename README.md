@@ -2,7 +2,7 @@
 
 ⭐ 如果你觉得这个项目有价值，请点一个 Star 支持我们！
 
-# go-sensitive-checker-fronted
+# sensitive-word-checker-frontend
 
 This template should help get you started developing with Vue 3 in Vite.
 
