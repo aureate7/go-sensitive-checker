@@ -7,7 +7,7 @@
 This template should help get you started developing with Vue 3 in Vite.
 
 ## repositories
-frontend: https://github.com/aureate7/go-sensitive-checker-fronted
+frontend: https://github.com/aureate7/sensitive-word-checker
 backend: https://github.com/aureate7/go-sensitive-checker
 
 ## How to employ
