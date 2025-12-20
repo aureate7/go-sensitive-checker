@@ -30,7 +30,7 @@
 
           <a
             class="nav-btn primary"
-            href="https://github.com"
+            href="https://github.com/aureate7/sensitive-word-checker"
             target="_blank"
           >
             GitHub
@@ -42,17 +42,45 @@
         <router-view />
       </el-main>
     </el-container>
+      <footer class="app-footer">
+    <div class="footer-content">
+      <div class="copyright">
+        © 2025
+        <a
+        class="beian"
+        href="http://www.codemo.xin"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Codemo Lab
+      </a>. All rights reserved.
+      </div>
+      <a
+        class="beian"
+        href="https://beian.miit.gov.cn/"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        粤ICP备2025455791号
+      </a>
+    </div>
+  </footer>
   </div>
 </template>
 
 <script setup>
 import { ref } from 'vue'
-import router from './router'
+// import router from './router'
 import {Moon, Sunny, Lock} from '@element-plus/icons-vue'
 
 const isDark = ref(false)
 const toggleDark = () => (isDark.value = !isDark.value)
-const goHome = () => router.push('/')
+const goHome = () => {
+  window.scrollTo({
+    top:0,
+    behavior: 'smooth',
+  })
+}
 </script>
 
 <!-- /* 不要 scoped */ -->
@@ -170,6 +198,37 @@ body {
   margin: 0 auto;
 }
 
+.app-footer {
+  padding: 28px 0 32px;
+  text-align: center;
+  font-size: 14px;
+
+  background-color: #0f172a;
+  background: linear-gradient(
+    to bottom,
+    rgba(0,0,0,0),
+    var(--bg-page)
+  );
+
+}
+
+.footer-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.beian {
+  color: #1e90ff; /* 蓝色备案号（和你图中一致） */
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.beian:hover {
+  text-decoration: underline;
+}
+
 /* ===== 导航栏（使用主题变量） ===== */
 .nav {
   height: 70px;
@@ -213,6 +272,8 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
+  /* 移动端避免按钮被挤到换行导致“竖排” */
+  flex-wrap: nowrap;
 }
 
 .nav-btn {
@@ -233,6 +294,8 @@ body {
   cursor: pointer;
   transition: 0.22s ease;
   text-decoration: none;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 /* Hover 发光效果：这里用透明度，不再写死白色，深浅模式都好看 */
@@ -258,5 +321,53 @@ body {
 /* 主内容区 */
 .main {
   padding: 12px 24px 24px;
+}
+
+/* ================== Mobile Responsive ================== */
+@media (max-width: 768px) {
+  .nav {
+    height: auto;
+    padding: 10px 12px;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .nav-left {
+    min-width: 0;
+  }
+
+  .brand-title {
+    font-size: 16px;
+  }
+
+  .brand-subtitle {
+    font-size: 12px;
+  }
+
+  /* 右侧按钮一行放不下就允许横向滑动，而不是挤成竖排 */
+  .nav-right {
+    width: 100%;
+    justify-content: flex-end;
+    gap: 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
+  }
+
+  .nav-btn {
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 420px) {
+  /* 小屏进一步压缩品牌信息，给按钮腾空间 */
+  .brand-subtitle {
+    display: none;
+  }
+
+  .nav-btn {
+    padding: 6px 10px;
+  }
 }
 </style>

@@ -82,41 +82,43 @@
       >
         <h4>命中敏感词</h4>
 
-        <!-- 优先按 categories 分组展示 -->
+        <!-- 优先按 categories 分组展示（卡片 + 标签网格） -->
         <template v-if="result.categories">
-          <div
-            v-for="(data, cat) in result.categories"
-            :key="cat"
-            class="word-group"
-          >
-            <div class="group-title">
-              {{ categoryMap[cat] || cat }}
-              <span class="group-count">
-                共 {{ data.words ? data.words.length : data.count }} 个
-              </span>
-            </div>
+          <el-row :gutter="12">
+            <el-col
+              v-for="(data, cat) in result.categories"
+              :key="cat"
+              :xs="24"
+              :sm="12"
+              :md="8"
+              class="word-col"
+            >
+              <el-card shadow="never" class="word-card">
+                <template #header>
+                  <div class="word-card__header">
+                    <span class="word-card__title">{{ categoryMap[cat] || cat }}</span>
+                    <el-tag size="small" type="info">
+                      {{ data.words ? data.words.length : data.count }} 个
+                    </el-tag>
+                  </div>
+                </template>
 
-            <el-space direction="vertical" fill>
-              <div
-                v-for="w in (data.words || [])"
-                :key="w.word + w.level"
-                class="word-item"
-              >
-                <span class="word-text">{{ w.word }}</span>
-                <span class="word-meta">
+                <div class="word-grid">
                   <el-tag
-                    size="small"
-                    :type="w.level === 'high' ? 'danger' : 'warning'"
+                    v-for="w in normalizeWords(data.words || [])"
+                    :key="w.word + (w.level || '')"
+                    class="word-tag"
+                    :type="w.level === 'high' ? 'danger' : (w.level === 'medium' ? 'warning' : 'info')"
+                    effect="light"
+                    disable-transitions
                   >
-                    {{ w.level === 'high' ? '高风险' : '低风险' }}
+                    <span class="word-tag__text">{{ w.word }}</span>
+                    <span class="word-tag__count">×{{ w.count_raw || 1 }}</span>
                   </el-tag>
-                  <span class="word-count">
-                    出现 {{ w.count_raw || 1 }} 次
-                  </span>
-                </span>
-              </div>
-            </el-space>
-          </div>
+                </div>
+              </el-card>
+            </el-col>
+          </el-row>
         </template>
 
         <!-- 如果没有 categories 字段，就直接平铺 detected_words -->
@@ -227,6 +229,30 @@ const categoryMap = {
   advertising_low: '广告低敏感',
 }
 
+/**
+ * 收集所有需要高亮的敏感词
+ * 兼容两种结构：
+ * 1) result.detected_words: [{ word, ... }, ...]
+ * 2) result.categories: { cat: { words: [...] }, ... }
+ */
+
+// 词条排序：level(高>中>低) + count_raw(降序)
+const normalizeWords = (words = []) => {
+  const rank = { high: 3, medium: 2, low: 1 }
+  return [...words].sort((a, b) => {
+    const ra = rank[a?.level] || 0
+    const rb = rank[b?.level] || 0
+    if (ra !== rb) return rb - ra
+
+    const ca = Number(a?.count_raw || 1)
+    const cb = Number(b?.count_raw || 1)
+    if (ca !== cb) return cb - ca
+
+    // 最后按词本身排序，保证稳定输出
+    return String(a?.word || '').localeCompare(String(b?.word || ''), 'zh-Hans-CN')
+  })
+}
+
 const riskLevelText = computed(() => {
   if (!props.result) return '--'
   const mp = {
@@ -246,9 +272,9 @@ const riskLevelText = computed(() => {
  */
 
 // 过滤掉HTML标签
-const cleanText = (text) => {
-  return text.replace(/<\/?[^>]+(>|$)/g, "")
-}
+// const cleanText = (text) => {
+//   return text.replace(/<\/?[^>]+(>|$)/g, "")
+// }
 
 const detectedWordList = computed(() => {
   const r = props.result
@@ -414,4 +440,96 @@ const detectedWordList = computed(() => {
   color: var(--text-sub);
 }
 
+/* ===== 命中敏感词：卡片 + 标签网格（更整齐） ===== */
+.word-col {
+  display: flex;
+}
+
+.word-card {
+  width: 100%;
+  height: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+/* 让卡片内部 padding 更紧凑，整体更像“统计面板” */
+.word-card :deep(.el-card__header) {
+  padding: 12px 14px;
+}
+
+.word-card :deep(.el-card__body) {
+  padding: 12px 14px 14px;
+}
+
+.word-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.word-card__title {
+  font-weight: 600;
+  color: var(--text-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 标签改为网格布局：每行对齐、宽度一致 */
+.word-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 10px;
+
+  /* 类别词多时保持卡片高度更一致 */
+  max-height: 170px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.word-tag {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+
+  box-sizing: border-box;
+  border-radius: 8px;
+}
+
+.word-tag__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.word-tag__count {
+  flex: none;
+  opacity: 0.75;
+  font-size: 12px;
+}
+
+/* 深色模式兼容：如果你全局用 CSS 变量做暗色，这里尽量不写死颜色 */
+@media (prefers-color-scheme: dark) {
+  .word-card {
+    background: rgba(15, 23, 42, 0.55);
+    border-color: rgba(148, 163, 184, 0.25);
+  }
+}
+
+.word-grid::-webkit-scrollbar {
+  width: 6px;
+}
+.word-grid::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 6px;
+}
+.word-grid::-webkit-scrollbar-track {
+  background: transparent;
+}
 </style>
