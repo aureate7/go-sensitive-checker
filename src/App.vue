@@ -20,11 +20,9 @@
           <button class="nav-btn" @click="goHome">首页</button>
 
           <button class="nav-btn ghost" @click="toggleDark">
-                <el-icon>
-                    <!-- <Moon v-if="isDark" />
-                    <Sunny v-else /> -->
-                    <component :is="isDark ? Moon : Sunny"></component>
-                </el-icon>
+            <el-icon>
+              <component :is="isDark ? Moon : Sunny"></component>
+            </el-icon>
             <span>{{ isDark ? '深色模式' : '亮色模式' }}</span>
           </button>
 
@@ -42,42 +40,38 @@
         <router-view />
       </el-main>
     </el-container>
-      <footer class="app-footer">
-    <div class="footer-content">
-      <div class="copyright">
-        © 2025
+
+    <footer class="app-footer">
+      <div class="footer-content">
+        <div class="copyright">
+          © 2025
+          <a class="beian" href="http://www.codemo.xin" target="_blank" rel="noopener noreferrer">
+            Codemo Lab
+          </a>
+          . All rights reserved.
+        </div>
         <a
-        class="beian"
-        href="http://www.codemo.xin"
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        Codemo Lab
-      </a>. All rights reserved.
+          class="beian"
+          href="https://beian.miit.gov.cn/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          粤ICP备2025455791号
+        </a>
       </div>
-      <a
-        class="beian"
-        href="https://beian.miit.gov.cn/"
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        粤ICP备2025455791号
-      </a>
-    </div>
-  </footer>
+    </footer>
   </div>
 </template>
 
 <script setup>
 import { ref } from 'vue'
-// import router from './router'
-import {Moon, Sunny, Lock} from '@element-plus/icons-vue'
+import { Moon, Sunny, Lock } from '@element-plus/icons-vue'
 
 const isDark = ref(false)
 const toggleDark = () => (isDark.value = !isDark.value)
 const goHome = () => {
   window.scrollTo({
-    top:0,
+    top: 0,
     behavior: 'smooth',
   })
 }
@@ -88,7 +82,10 @@ const goHome = () => {
 /* 🌞 默认：浅色主题（挂在 .app-shell 上） */
 .app-shell {
   /* 页面背景 & 文字 */
-  --bg-page: #f3f4f6;
+  --bg-page:
+    radial-gradient(circle at 10% 10%, rgba(129, 140, 248, 0.16), transparent 55%),
+    radial-gradient(circle at 90% 30%, rgba(56, 189, 248, 0.14), transparent 55%),
+    radial-gradient(circle at 30% 90%, rgba(34, 197, 94, 0.1), transparent 60%), #f7f8fc;
   --text-main: #111827;
   --text-sub: #4b5563;
 
@@ -108,29 +105,10 @@ const goHome = () => {
   --nav-btn-primary-border: rgba(22, 163, 74, 0.35);
   --nav-btn-primary-text: #15803d;
 
-  /* 主体卡片 */
-  --bg-main: #eef2ff;
-  --bg-shell: #ffffff;
-  --bg-card-soft: #ffffff;
-  --bg-card-alt: #f9fafb;
-  --border-subtle: rgba(148, 163, 184, 0.25);
-  --shadow-subtle: 0 24px 50px rgba(15, 23, 42, 0.08);
-
-  /* Home 大面板背景 */
-  --panel-shell-bg:
-    radial-gradient(circle at top left, rgba(129, 140, 248, 0.18), transparent 55%),
-    radial-gradient(circle at bottom right, rgba(56, 189, 248, 0.2), transparent 55%),
-    #ffffff;
-
-  /* 输入 / 预览背景 */
-  --input-bg: #f9fafb;
-  --input-border: rgba(148, 163, 184, 0.5);
-  --preview-bg: #f9fafb;
-
-  /* 外壳颜色（你刚才做的外黑内白那一层） */
-  --result-shell-bg: #f3f4f6;
-
-  transition: background-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
+  transition:
+    background-color 0.3s ease,
+    color 0.3s ease,
+    box-shadow 0.3s ease;
 }
 
 /* 🌙 深色主题：在 .app-shell--dark 上覆盖 */
@@ -141,9 +119,7 @@ const goHome = () => {
 
   --nav-bg: rgba(17, 25, 40, 0.78);
   --nav-border: rgba(148, 163, 184, 0.28);
-  --nav-shadow:
-    0 4px 20px rgba(0, 0, 0, 0.5),
-    0 0 32px rgba(99, 102, 241, 0.2);
+  --nav-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 32px rgba(99, 102, 241, 0.2);
 
   --brand-title: #f1f5f9;
   --brand-sub: rgba(148, 163, 184, 0.85);
@@ -155,24 +131,6 @@ const goHome = () => {
   --nav-btn-primary-bg: rgba(16, 185, 129, 0.22);
   --nav-btn-primary-border: rgba(16, 185, 129, 0.5);
   --nav-btn-primary-text: #6ee7b7;
-
-  --bg-main: #020617;
-  --bg-shell: rgba(15, 23, 42, 0.98);
-  --bg-card-soft: rgba(15, 23, 42, 0.96);
-  --bg-card-alt: rgba(15, 23, 42, 0.9);
-  --border-subtle: rgba(148, 163, 184, 0.35);
-  --shadow-subtle: 0 24px 60px rgba(15, 23, 42, 0.9);
-
-  --panel-shell-bg:
-    radial-gradient(circle at top left, rgba(148, 163, 184, 0.22), transparent 55%),
-    radial-gradient(circle at bottom right, rgba(56, 189, 248, 0.22), transparent 55%),
-    rgba(15, 23, 42, 0.96);
-
-  --input-bg: rgba(15, 23, 42, 0.96);
-  --input-border: rgba(148, 163, 184, 0.6);
-  --preview-bg: rgba(15, 23, 42, 0.96);
-
-  --result-shell-bg: #020617;
 }
 
 /* 让 body 也吃到变量（防止有旧样式残留） */
@@ -182,7 +140,6 @@ body {
   color: var(--text-main);
 }
 </style>
-
 
 <!-- ========= 导航 / 布局具体样式（scoped） ========= -->
 <style scoped>
@@ -202,14 +159,7 @@ body {
   padding: 28px 0 32px;
   text-align: center;
   font-size: 14px;
-
-  background-color: #0f172a;
-  background: linear-gradient(
-    to bottom,
-    rgba(0,0,0,0),
-    var(--bg-page)
-  );
-
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), var(--bg-page));
 }
 
 .footer-content {
@@ -220,7 +170,7 @@ body {
 }
 
 .beian {
-  color: #1e90ff; /* 蓝色备案号（和你图中一致） */
+  color: #1e90ff;
   text-decoration: none;
   font-size: 14px;
 }
@@ -244,27 +194,43 @@ body {
 }
 
 /* 左侧品牌 */
+.nav-left {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .brand-icon {
   font-size: 28px;
   color: #93c5fd;
-  filter: drop-shadow(0 0 8px rgba(96,165,250,0.4));
+  filter: drop-shadow(0 0 8px rgba(96, 165, 250, 0.4));
+}
+
+.brand-text {
+  min-width: 0;
 }
 
 .brand-title {
   font-size: 18px;
   font-weight: 600;
   color: var(--brand-title);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .brand-subtitle {
   font-size: 12px;
   color: var(--brand-sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ===== 导航按钮 ===== */
@@ -272,7 +238,6 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  /* 移动端避免按钮被挤到换行导致“竖排” */
   flex-wrap: nowrap;
 }
 
@@ -298,15 +263,13 @@ body {
   flex: 0 0 auto;
 }
 
-/* Hover 发光效果：这里用透明度，不再写死白色，深浅模式都好看 */
 .nav-btn:hover {
-  background: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.22);
   transform: translateY(-2px);
-  box-shadow: 0 0 12px rgba(148,163,255,0.32);
+  box-shadow: 0 0 12px rgba(148, 163, 255, 0.32);
 }
 
-/* GitHub 主按钮 */
 .nav-btn.primary {
   background: var(--nav-btn-primary-bg);
   border-color: var(--nav-btn-primary-border);
@@ -315,7 +278,7 @@ body {
 
 .nav-btn.primary:hover {
   background: rgba(16, 185, 129, 0.3);
-  box-shadow: 0 0 16px rgba(52,211,153,0.55);
+  box-shadow: 0 0 16px rgba(52, 211, 153, 0.55);
 }
 
 /* 主内容区 */
@@ -326,14 +289,9 @@ body {
 /* ================== Mobile Responsive ================== */
 @media (max-width: 768px) {
   .nav {
-    height: auto;
-    padding: 10px 12px;
+    padding: 0 12px;
     gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .nav-left {
-    min-width: 0;
+    flex-wrap: nowrap;
   }
 
   .brand-title {
@@ -344,30 +302,43 @@ body {
     font-size: 12px;
   }
 
-  /* 右侧按钮一行放不下就允许横向滑动，而不是挤成竖排 */
+  /* 关键：不要横向滚动隐藏按钮，优先让按钮“变小但保持一行” */
   .nav-right {
-    width: 100%;
-    justify-content: flex-end;
     gap: 8px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    padding-bottom: 2px;
-  }
-
-  .nav-btn {
-    padding: 6px 12px;
-    font-size: 13px;
-  }
-}
-
-@media (max-width: 420px) {
-  /* 小屏进一步压缩品牌信息，给按钮腾空间 */
-  .brand-subtitle {
-    display: none;
+    overflow: visible;
+    max-width: none;
+    white-space: nowrap;
   }
 
   .nav-btn {
     padding: 6px 10px;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 520px) {
+  .brand-subtitle {
+    display: none;
+  }
+
+  /* 主题按钮仅保留图标，避免竖排/换行 */
+  .nav-btn.ghost span {
+    display: none;
+  }
+
+  .nav-btn {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 420px) {
+  .brand-title {
+    font-size: 15px;
+  }
+
+  .nav-right {
+    gap: 6px;
   }
 }
 </style>
