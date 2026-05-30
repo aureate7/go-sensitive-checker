@@ -44,8 +44,13 @@
     <footer class="app-footer">
       <div class="footer-content">
         <div class="copyright">
-          © 2025
-          <a class="beian" href="http://www.codemo.xin" target="_blank" rel="noopener noreferrer">
+          © 2026
+          <a
+            class="beian"
+            href="http://www.codemo.website"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             Codemo Lab
           </a>
           . All rights reserved.
@@ -56,7 +61,7 @@
           target="_blank"
           rel="noopener noreferrer"
         >
-          粤ICP备2025455791号
+          粤ICP备2025419836号
         </a>
       </div>
     </footer>
