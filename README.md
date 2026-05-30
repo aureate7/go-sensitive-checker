@@ -2,7 +2,6 @@
 
 一个可直接落地的敏感词检测系统，支持多策略命中（精确/归一化/模糊/拼音）、风险分级、命中定位跳转、词组映射、可选大模型辅助鉴别、前端打码与复制导出。
 
-- 在线体验：[https://sensiteword.site](https://sensiteword.site)
 - 前端 + 后端仓库（当前项目）：[https://github.com/aureate7/sensitive-word-checker](https://github.com/aureate7/sensitive-word-checker)
 - 后端仓库（后端独立版）：[https://github.com/aureate7/go-sensitive-checker-backend](https://github.com/aureate7/go-sensitive-checker-backend)
 
