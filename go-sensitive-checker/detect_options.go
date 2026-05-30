@@ -1,6 +1,10 @@
 package main
 
-import "os"
+import (
+	"os"
+	"strconv"
+	"strings"
+)
 
 const (
 	matchTypeExactRaw        = "exact_raw"
@@ -25,6 +29,7 @@ type DetectOptions struct {
 	FuzzyMatch        bool          `json:"fuzzy_match"`
 	PinyinMatch       bool          `json:"pinyin_match"`
 	EnableTermMapping bool          `json:"enable_term_mapping"`
+	EnableLLMAssist   bool          `json:"enable_llm_assist"`
 	MappingMode       string        `json:"mapping_mode,omitempty"` // incremental / override
 	CustomMappings    []TermMapping `json:"custom_mappings,omitempty"`
 }
@@ -55,6 +60,12 @@ type DetectorConfig struct {
 	EnableAutoPinyin     bool
 	EnablePinyinInitials bool
 	PinyinAliasPath      string
+	EnableLLMAssist      bool
+	LLMAPIBaseURL        string
+	LLMAPIKey            string
+	LLMModel             string
+	LLMTimeoutMS         int
+	LLMMaxTextRunes      int
 }
 
 func DefaultDetectorConfig(basePath string) DetectorConfig {
@@ -66,6 +77,12 @@ func DefaultDetectorConfig(basePath string) DetectorConfig {
 		EnableAutoPinyin:     envBool("SENSITIVE_ENABLE_AUTO_PINYIN", true),
 		EnablePinyinInitials: envBool("SENSITIVE_ENABLE_PINYIN_INITIALS", false),
 		PinyinAliasPath:      envStr("SENSITIVE_PINYIN_ALIAS_FILE", basePath+"/拼音混淆词/拼音映射.txt"),
+		EnableLLMAssist:      envBool("SENSITIVE_ENABLE_LLM_ASSIST", true),
+		LLMAPIBaseURL:        strings.TrimRight(envStr("SENSITIVE_LLM_API_BASE_URL", "https://api.deepseek.com"), "/"),
+		LLMAPIKey:            strings.TrimSpace(envStr("SENSITIVE_LLM_API_KEY", "")),
+		LLMModel:             strings.TrimSpace(envStr("SENSITIVE_LLM_MODEL", "deepseek-v4-flash")),
+		LLMTimeoutMS:         envInt("SENSITIVE_LLM_TIMEOUT_MS", 10000),
+		LLMMaxTextRunes:      envInt("SENSITIVE_LLM_MAX_TEXT_RUNES", 1200),
 	}
 }
 
@@ -89,4 +106,16 @@ func envStr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func envInt(key string, def int) int {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return def
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return def
+	}
+	return n
 }

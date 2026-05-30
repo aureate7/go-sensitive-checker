@@ -21,37 +21,21 @@
 
       <!-- 选择检测类别 + 按钮 -->
       <el-form-item>
-        
-        <div class="category-label-row" style="margin-bottom: 8px;">
+        <div class="category-label-row" style="margin-bottom: 8px">
           <span class="category-label-main">选择检测类别</span>
 
           <div class="category-actions">
-            <el-button
-              class="btn-clear"
-              size="small"
-              @click="clearCategories"
-            >
+            <el-button class="btn-clear" size="small" @click="clearCategories">
               清空类别
             </el-button>
 
-            <el-button
-              class="btn-select-all"
-              size="small"
-              @click="selectAll"
-            >
-              全选
-            </el-button>
+            <el-button class="btn-select-all" size="small" @click="selectAll"> 全选 </el-button>
           </div>
         </div>
 
         <el-checkbox-group v-model="selectedKeys">
           <el-row :gutter="12">
-            <el-col
-              v-for="(label, key) in categories"
-              :key="key"
-              :xs="12"
-              :sm="8"
-            >
+            <el-col v-for="(label, key) in categories" :key="key" :xs="12" :sm="8">
               <el-checkbox :label="key">
                 {{ label }}
               </el-checkbox>
@@ -65,16 +49,20 @@
           <div class="mapping-head">
             <div class="mapping-title-row">
               <span class="category-label-main">词组映射</span>
-              <el-tooltip
-                effect="light"
-                placement="top"
-                popper-class="mapping-help-popper"
-              >
+              <el-tooltip effect="light" placement="top" popper-class="mapping-help-popper">
                 <template #content>
                   <div class="mapping-help-pop">
-                    <div>1. 开启后，系统会先将原文中的隐晦写法映射为规范词，再进入敏感词检测流程。</div>
-                    <div>2. 映射文件支持格式：`源词=>目标词`（也兼容 `->`、`=`、英文逗号`,`、制表符），每行一条。</div>
-                    <div>3. `增量映射`：系统内置映射 + 你导入的映射共同生效；`覆盖映射`：只使用你导入的映射。</div>
+                    <div>
+                      1. 开启后，系统会先将原文中的隐晦写法映射为规范词，再进入敏感词检测流程。
+                    </div>
+                    <div>
+                      2. 映射文件支持格式：`源词=>目标词`（也兼容
+                      `->`、`=`、英文逗号`,`、制表符），每行一条。
+                    </div>
+                    <div>
+                      3. `增量映射`：系统内置映射 +
+                      你导入的映射共同生效；`覆盖映射`：只使用你导入的映射。
+                    </div>
                     <div>4. 相同映射项会自动去重，注释行（`#` 或 `//` 开头）会被忽略。</div>
                   </div>
                 </template>
@@ -114,27 +102,17 @@
               @change="handleMappingFileChange"
             />
 
-            <el-button
-              size="small"
-              :disabled="!enableTermMapping"
-              @click="triggerMappingImport"
-            >
+            <el-button size="small" :disabled="!enableTermMapping" @click="triggerMappingImport">
               导入映射文件
             </el-button>
 
-            <el-button
-              size="small"
-              @click="clearMappings"
-              :disabled="!customMappings.length"
-            >
+            <el-button size="small" @click="clearMappings" :disabled="!customMappings.length">
               清空导入
             </el-button>
           </div>
 
           <div class="mapping-meta">
-            <el-tag size="small" type="info">
-              已导入 {{ customMappings.length }} 条
-            </el-tag>
+            <el-tag size="small" type="info"> 已导入 {{ customMappings.length }} 条 </el-tag>
             <span v-if="mappingFileName" class="mapping-file-name">
               {{ mappingFileName }}
             </span>
@@ -149,7 +127,39 @@
           />
         </div>
       </el-form-item>
-      
+
+      <el-form-item>
+        <div class="llm-box">
+          <div class="llm-head">
+            <div class="mapping-title-row">
+              <span class="category-label-main">大模型辅助鉴别</span>
+              <el-tooltip effect="light" placement="top" popper-class="mapping-help-popper">
+                <template #content>
+                  <div class="mapping-help-pop">
+                    <div>
+                      1. 开启后，将会在规则检测完成后调用 DeepSeek-V4-Flash 进行辅助风险评估。
+                    </div>
+                    <div>2. 辅助结论不会替代规则引擎结果，可用于二次复核与边界文本判断。</div>
+                  </div>
+                </template>
+                <span class="rate-help-trigger">
+                  <el-icon><QuestionFilled /></el-icon>
+                </span>
+              </el-tooltip>
+            </div>
+            <el-switch
+              v-model="enableLLMAssist"
+              inline-prompt
+              active-text="开"
+              inactive-text="关"
+            />
+          </div>
+          <p class="mapping-help">
+            建议在规则命中边界场景中开启，用于补充“是否建议人工复核”的判断。
+          </p>
+        </div>
+      </el-form-item>
+
       <!-- 底部按钮 -->
       <el-form-item>
         <el-space>
@@ -186,6 +196,7 @@ const text = ref('')
 const categories = ref({})
 const selectedKeys = ref([])
 const enableTermMapping = ref(true)
+const enableLLMAssist = ref(false)
 const mappingMode = ref('incremental')
 const customMappings = ref([])
 const mappingFileName = ref('')
@@ -224,6 +235,7 @@ const handleSubmit = () => {
     fuzzy_match: true,
     pinyin_match: true,
     enable_term_mapping: enableTermMapping.value,
+    enable_llm_assist: enableLLMAssist.value,
     mapping_mode: mappingMode.value,
     custom_mappings: customMappings.value,
   }
@@ -446,7 +458,21 @@ const clearMappings = () => {
   padding: 10px;
 }
 
+.llm-box {
+  width: 100%;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 10px;
+  padding: 10px;
+}
+
 .mapping-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.llm-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -523,5 +549,4 @@ const clearMappings = () => {
   font-size: 12px;
   color: var(--text-sub);
 }
-
 </style>

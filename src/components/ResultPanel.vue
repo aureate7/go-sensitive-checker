@@ -49,6 +49,50 @@
         </el-alert>
       </div>
 
+      <div v-if="llmAssistVisible" class="llm-assist-block">
+        <h4>大模型辅助鉴别</h4>
+        <el-alert
+          v-if="llmAssistError"
+          type="warning"
+          show-icon
+          :closable="false"
+          :description="`辅助鉴别调用失败：${llmAssistError}`"
+        />
+        <el-alert
+          v-else
+          :type="llmAssistAlertType"
+          show-icon
+          :closable="false"
+        >
+          结论：
+          <el-tag size="small" :type="llmAssistTagType">
+            {{ llmAssistRiskText }}
+          </el-tag>
+          ，{{ llmAssistReviewText }}
+          <template v-if="llmAssistConfidenceText">
+            ，置信度 {{ llmAssistConfidenceText }}
+          </template>
+          <template v-if="llmAssistModel">
+            ，模型 {{ llmAssistModel }}
+          </template>
+          <template v-if="llmAssistReason">
+            。说明：{{ llmAssistReason }}
+          </template>
+        </el-alert>
+
+        <div v-if="llmAssistTerms.length" class="llm-assist-terms">
+          <span class="llm-assist-terms__label">可疑词建议：</span>
+          <el-tag
+            v-for="term in llmAssistTerms"
+            :key="term"
+            size="small"
+            class="llm-assist-terms__tag"
+          >
+            {{ term }}
+          </el-tag>
+        </div>
+      </div>
+
       <div v-if="textTotalCount > 0" class="rate-summary">
         <div class="rate-title-row">
           <h4>敏感词率</h4>
@@ -556,6 +600,76 @@ const riskLevelText = computed(() => {
     safe: '安全',
   }
   return mp[props.result.risk_level] || props.result.risk_level || '--'
+})
+
+const llmAssist = computed(() => props.result?.llm_assist || null)
+
+const llmAssistVisible = computed(() => {
+  const enabledByOptions = !!props.result?.applied_options?.enable_llm_assist
+  return enabledByOptions || !!llmAssist.value
+})
+
+const llmAssistError = computed(() => {
+  const errorText = String(llmAssist.value?.error || '').trim()
+  if (errorText) return errorText
+  if (!llmAssist.value && props.result?.applied_options?.enable_llm_assist) {
+    return '后端未返回辅助鉴别结果'
+  }
+  return ''
+})
+
+const llmAssistRisk = computed(() =>
+  String(llmAssist.value?.risk_level || '').toLowerCase(),
+)
+
+const llmAssistRiskText = computed(() => {
+  const mp = {
+    safe: '安全',
+    low: '低风险',
+    medium: '中风险',
+    high: '高风险',
+  }
+  return mp[llmAssistRisk.value] || '未知'
+})
+
+const llmAssistAlertType = computed(() => {
+  if (llmAssistRisk.value === 'high') return 'error'
+  if (llmAssistRisk.value === 'medium') return 'warning'
+  if (llmAssistRisk.value === 'low') return 'info'
+  if (llmAssistRisk.value === 'safe') return 'success'
+  return 'info'
+})
+
+const llmAssistTagType = computed(() => {
+  if (llmAssistRisk.value === 'high') return 'danger'
+  if (llmAssistRisk.value === 'medium') return 'warning'
+  if (llmAssistRisk.value === 'low') return 'info'
+  if (llmAssistRisk.value === 'safe') return 'success'
+  return 'info'
+})
+
+const llmAssistReviewText = computed(() =>
+  llmAssist.value?.should_review ? '建议人工复核' : '可直接放行',
+)
+
+const llmAssistReason = computed(() =>
+  String(llmAssist.value?.reason || '').trim(),
+)
+
+const llmAssistModel = computed(() =>
+  String(llmAssist.value?.model || '').trim(),
+)
+
+const llmAssistConfidenceText = computed(() => {
+  const value = Number(llmAssist.value?.confidence)
+  if (!Number.isFinite(value)) return ''
+  return `${(Math.max(0, Math.min(1, value)) * 100).toFixed(1)}%`
+})
+
+const llmAssistTerms = computed(() => {
+  const list = llmAssist.value?.suspected_terms
+  if (!Array.isArray(list) || !list.length) return []
+  return Array.from(new Set(list.map((item) => String(item || '').trim()).filter(Boolean)))
 })
 
 /**
@@ -1624,6 +1738,7 @@ onBeforeUnmount(() => {
 }
 
 .rate-summary h4,
+.llm-assist-block h4,
 .category-summary h4,
 .words-block h4,
 .masked-block h4,
@@ -1632,6 +1747,19 @@ onBeforeUnmount(() => {
   margin: 0 0 8px;
   font-size: 14px;
   color: var(--text-sub);     /* 标题用主文字色 */
+}
+
+.llm-assist-terms {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.llm-assist-terms__label {
+  font-size: 12px;
+  color: var(--text-sub);
 }
 
 .rate-summary {

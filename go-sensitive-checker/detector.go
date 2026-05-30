@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"os"
 	"path/filepath"
 	"sort"
@@ -59,6 +60,7 @@ type Detector struct {
 	normalizer    *Normalizer
 	fuzzyMatcher  *FuzzyMatcher
 	pinyinMatcher *PinyinMatcher
+	llmAssist     *llmAssistClient
 }
 
 func NewDetector(basePath string) *Detector {
@@ -67,6 +69,10 @@ func NewDetector(basePath string) *Detector {
 
 func NewDetectorWithConfig(basePath string, cfg DetectorConfig) *Detector {
 	normalizer := NewNormalizer()
+	var llmClient *llmAssistClient
+	if cfg.EnableLLMAssist {
+		llmClient = newLLMAssistClient(cfg)
+	}
 	d := &Detector{
 		basePath:       basePath,
 		config:         cfg,
@@ -78,6 +84,7 @@ func NewDetectorWithConfig(basePath string, cfg DetectorConfig) *Detector {
 		normalizer:     normalizer,
 		fuzzyMatcher:   NewFuzzyMatcher(normalizer),
 		pinyinMatcher:  NewPinyinMatcher(normalizer, cfg.PinyinAliasPath, cfg.EnableAutoPinyin, cfg.EnablePinyinInitials),
+		llmAssist:      llmClient,
 	}
 	for cat := range CategoryDisplay {
 		d.sensitiveWords[cat] = make(map[string]struct{})
@@ -258,6 +265,7 @@ type DetectResponse struct {
 	AppliedOptions       DetectOptions             `json:"applied_options"`
 	HitEvidences         []HitEvidence             `json:"hit_evidences"`
 	MaskSuggestions      []MaskSuggestion          `json:"mask_suggestions"`
+	LLMAssist            *LLMAssistResult          `json:"llm_assist,omitempty"`
 }
 
 func (d *Detector) levelOf(category, word string) (level, original string) {
@@ -549,6 +557,28 @@ func (d *Detector) DetectWithOptions(text string, categories []string, options *
 			RiskLevel:     group.RiskLevel,
 			MatchedTexts:  matchedTexts,
 		})
+	}
+
+	if applied.EnableLLMAssist {
+		llmReport := &LLMAssistResult{
+			Enabled: true,
+			Used:    false,
+			Model:   strings.TrimSpace(d.config.LLMModel),
+		}
+		switch {
+		case !d.config.EnableLLMAssist:
+			llmReport.Error = "server disabled llm assist (SENSITIVE_ENABLE_LLM_ASSIST=false)"
+		case d.llmAssist == nil:
+			llmReport.Error = "llm assist client not initialized"
+		default:
+			llmResult, err := d.llmAssist.Analyze(context.Background(), text, cats, resp)
+			if err != nil {
+				llmReport.Error = err.Error()
+			} else {
+				llmReport = &llmResult
+			}
+		}
+		resp.LLMAssist = llmReport
 	}
 
 	return resp

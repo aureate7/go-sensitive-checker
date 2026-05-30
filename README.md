@@ -1,6 +1,6 @@
 # 敏感词检测系统（Vue3 + Vite + Go + Gin）
 
-一个可直接落地的敏感词检测系统，支持多策略命中（精确/归一化/模糊/拼音）、风险分级、命中定位跳转、词组映射、前端打码与复制导出。
+一个可直接落地的敏感词检测系统，支持多策略命中（精确/归一化/模糊/拼音）、风险分级、命中定位跳转、词组映射、可选大模型辅助鉴别、前端打码与复制导出。
 
 - 在线体验：[https://sensiteword.site](https://sensiteword.site)
 - 前端 + 后端仓库（当前项目）：[https://github.com/aureate7/sensitive-word-checker](https://github.com/aureate7/sensitive-word-checker)
@@ -68,6 +68,12 @@
 - 打码结果可交互：在“打码文本”中点击片段可切换“打码/取消打码”。
 - 一键复制：复制当前打码文本（图标按钮）。
 
+### 大模型辅助鉴别（可选开关）
+
+- 前端可开启 `enable_llm_assist`，后端会在规则检测完成后调用大模型 API 进行补充判断。
+- 输出辅助风险等级、是否建议人工复核、简要原因与可疑词建议。
+- 辅助结论不会替代规则引擎命中结果，适用于边界文本复核场景。
+
 ---
 
 ## 系统架构
@@ -122,6 +128,19 @@ AC 自动机 + 归一化 + 模糊/拼音别名索引
 - Node.js：`^20.19.0 || >=22.12.0`
 - Go：`1.23+`
 
+### 0) 配置 DeepSeek（推荐）
+
+在启动后端前，先在终端配置大模型环境变量：
+
+```bash
+export SENSITIVE_LLM_API_BASE_URL="https://api.deepseek.com"
+export SENSITIVE_LLM_API_KEY="你的DeepSeekKey"
+export SENSITIVE_LLM_MODEL="deepseek-v4-flash"
+```
+
+> 提示：请勿将真实 `API Key` 提交到 Git 仓库。  
+> 如果你使用自建网关或代理地址，改 `SENSITIVE_LLM_API_BASE_URL` 即可。
+
 ### 1) 启动后端（Go）
 
 ```bash
@@ -155,6 +174,19 @@ npm run dev
 cd go-sensitive-checker
 go test ./...
 ```
+
+### 4) 两终端最小运行流程
+
+- 终端 A（后端）：
+  - `cd go-sensitive-checker`
+  - 配置 `SENSITIVE_LLM_*` 环境变量
+  - `go run .`
+- 终端 B（前端）：
+  - 在项目根目录执行 `npm run dev`
+- 浏览器访问：
+  - [http://localhost:5173](http://localhost:5173)
+- 页面操作：
+  - 输入文本 -> 勾选类别 -> 打开“大模型辅助鉴别” -> 点击“开始检测”
 
 ---
 
@@ -245,6 +277,7 @@ go test ./...
     "fuzzy_match": true,
     "pinyin_match": true,
     "enable_term_mapping": true,
+    "enable_llm_assist": true,
     "mapping_mode": "incremental",
     "custom_mappings": [
       { "from": "@", "to": "a" },
@@ -265,6 +298,7 @@ go test ./...
 | `hit_evidences` | 命中证据列表（含 start/end/match_type/matched_text） |
 | `mask_suggestions` | 打码建议（词库词与原文命中片段映射） |
 | `applied_options` | 实际生效的检测选项 |
+| `llm_assist` | 大模型辅助鉴别结果（开启时返回） |
 | `normalized_text` | 常规归一化文本 |
 | `normalized_aggressive_text` | 强归一化文本 |
 
@@ -278,6 +312,37 @@ go test ./...
 | `matched_text` | 原文命中片段 |
 | `start` / `end` | 原文中的 rune 下标区间（`[start,end)`） |
 | `risk_level` | 该条证据的风险等级 |
+
+`llm_assist` 字段说明：
+
+| 字段 | 说明 |
+|---|---|
+| `enabled` | 本次是否开启了辅助鉴别 |
+| `used` | 是否成功调用了大模型 |
+| `model` | 使用的模型名 |
+| `risk_level` | 辅助风险等级（`safe/low/medium/high`） |
+| `should_review` | 是否建议人工复核 |
+| `reason` | 辅助判断说明 |
+| `suspected_terms` | 建议关注的可疑词/短语 |
+| `confidence` | 置信度（0~1） |
+| `latency_ms` | 大模型辅助鉴别耗时（毫秒） |
+| `error` | 调用失败时的错误信息 |
+
+`llm_assist` 响应示例：
+
+```json
+{
+  "enabled": true,
+  "used": true,
+  "model": "deepseek-v4-flash",
+  "risk_level": "medium",
+  "should_review": true,
+  "reason": "文本存在规避表达，建议人工复核上下文语义。",
+  "suspected_terms": ["sh@bi", "sha-bi"],
+  "confidence": 0.86,
+  "latency_ms": 732
+}
+```
 
 ### 3) 词库统计
 
@@ -331,6 +396,12 @@ s b = sb
 | `SENSITIVE_ENABLE_AUTO_PINYIN` | `true` | 自动为汉字词生成拼音别名 |
 | `SENSITIVE_ENABLE_PINYIN_INITIALS` | `false` | 启用拼音首字母别名 |
 | `SENSITIVE_PINYIN_ALIAS_FILE` | `temp/拼音混淆词/拼音映射.txt` | 自定义拼音别名文件路径 |
+| `SENSITIVE_ENABLE_LLM_ASSIST` | `true` | 是否允许启用 LLM 辅助鉴别 |
+| `SENSITIVE_LLM_API_BASE_URL` | `https://api.deepseek.com` | 大模型 API 基础地址（DeepSeek/OpenAI 兼容） |
+| `SENSITIVE_LLM_API_KEY` | 空 | 大模型 API Key |
+| `SENSITIVE_LLM_MODEL` | `deepseek-v4-flash` | 大模型名称 |
+| `SENSITIVE_LLM_TIMEOUT_MS` | `10000` | 辅助鉴别请求超时（毫秒） |
+| `SENSITIVE_LLM_MAX_TEXT_RUNES` | `1200` | 发送给大模型的最大字符数（rune） |
 
 ---
 
@@ -383,6 +454,16 @@ go build -o sensitive-checker
 ### 4) 词库修改后无变化
 
 后端启动时加载词库，修改 `go-sensitive-checker/temp` 下文件后需要重启后端。
+
+### 5) 大模型辅助鉴别未生效 / 报错
+
+优先检查以下项：
+
+- `SENSITIVE_LLM_API_KEY` 是否为空或拼写错误。
+- `SENSITIVE_LLM_API_BASE_URL` 是否可访问（默认 `https://api.deepseek.com`）。
+- `SENSITIVE_LLM_MODEL` 是否为可用模型（当前默认 `deepseek-v4-flash`）。
+- 前端是否开启“大模型辅助鉴别”开关（对应 `enable_llm_assist=true`）。
+- 响应中的 `llm_assist.error` 具体错误信息（网络、鉴权、限流等）。
 
 ---
 
