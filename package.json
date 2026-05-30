@@ -15,9 +15,9 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
-    "axios": "^1.13.2",
+    "axios": "^1.16.1",
     "bootstrap-icons": "^1.13.1",
-    "element-plus": "^2.12.0",
+    "element-plus": "^2.14.1",
     "pinia": "^3.0.4",
     "vue-router": "^4.6.3"
   },
@@ -32,5 +32,10 @@
     "vite": "^7.2.6",
     "vite-plugin-vue-devtools": "^8.0.5",
     "vue": "^3.5.25"
+  },
+  "overrides": {
+    "lodash": "4.17.23",
+    "lodash-es": "4.17.23",
+    "postcss": "8.5.10"
   }
 }
