@@ -18,6 +18,7 @@
         <!-- 右侧：菜单 -->
         <div class="nav-right">
           <button class="nav-btn" @click="goHome">首页</button>
+          <button class="nav-btn" @click="router.push('/admin')">词库管理</button>
 
           <button class="nav-btn ghost" @click="toggleDark">
             <el-icon>
@@ -70,11 +71,17 @@
 
 <script setup>
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { Moon, Sunny, Lock } from '@element-plus/icons-vue'
 
 const isDark = ref(false)
+const router = useRouter()
 const toggleDark = () => (isDark.value = !isDark.value)
 const goHome = () => {
+	if (router.currentRoute.value.path !== '/') {
+		router.push('/')
+		return
+	}
   window.scrollTo({
     top: 0,
     behavior: 'smooth',

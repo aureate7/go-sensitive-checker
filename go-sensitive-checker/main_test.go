@@ -107,3 +107,83 @@ func TestStatusReportsCapabilitiesAndLimits(t *testing.T) {
 		t.Fatalf("unexpected status: %s", recorder.Body.String())
 	}
 }
+
+func TestAdminWordLifecycleAndAudit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := newDetectorService(NewDetector(setupTestWordRepo(t)))
+	router := newRouter(service, serverConfig{AdminToken: "admin-secret", DataPath: t.TempDir()})
+
+	unauthorized := performJSONRequest(router, http.MethodGet, "/api/admin/words", nil, nil)
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized, got %d", unauthorized.Code)
+	}
+
+	headers := map[string]string{"Authorization": "Bearer admin-secret"}
+	created := performJSONRequest(router, http.MethodPost, "/api/admin/words", wordMutationRequest{
+		Category: AbusiveHigh, Word: "新增测试词", Reason: "unit test",
+	}, headers)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create failed: %d %s", created.Code, created.Body.String())
+	}
+	if _, ok := service.detector().sensitiveWords[AbusiveHigh]["新增测试词"]; !ok {
+		t.Fatal("created word not active after reload")
+	}
+
+	duplicate := performJSONRequest(router, http.MethodPost, "/api/admin/words", wordMutationRequest{
+		Category: AbusiveHigh, Word: "新增测试词",
+	}, headers)
+	if duplicate.Code != http.StatusConflict {
+		t.Fatalf("expected duplicate conflict, got %d", duplicate.Code)
+	}
+
+	preview := performJSONRequest(router, http.MethodPost, "/api/admin/words/import/preview", importRequest{
+		Category: AbusiveHigh, Content: "新增测试词\n批量新词\n批量新词\n",
+	}, headers)
+	if preview.Code != http.StatusOK || !bytes.Contains(preview.Body.Bytes(), []byte("批量新词")) {
+		t.Fatalf("unexpected preview: %d %s", preview.Code, preview.Body.String())
+	}
+
+	versions := performJSONRequest(router, http.MethodGet, "/api/admin/wordlists/versions", nil, headers)
+	if versions.Code != http.StatusOK || !bytes.Contains(versions.Body.Bytes(), []byte("version")) {
+		t.Fatalf("expected version snapshot: %d %s", versions.Code, versions.Body.String())
+	}
+
+	audit := performJSONRequest(router, http.MethodGet, "/api/admin/audit", nil, headers)
+	if audit.Code != http.StatusOK || !bytes.Contains(audit.Body.Bytes(), []byte("word.create")) {
+		t.Fatalf("expected audit entry: %d %s", audit.Code, audit.Body.String())
+	}
+
+	deleted := performJSONRequest(router, http.MethodDelete, "/api/admin/words", wordMutationRequest{
+		Category: AbusiveHigh, Word: "新增测试词", Reason: "unit test cleanup",
+	}, headers)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete failed: %d %s", deleted.Code, deleted.Body.String())
+	}
+	if _, ok := service.detector().sensitiveWords[AbusiveHigh]["新增测试词"]; ok {
+		t.Fatal("deleted word remains active")
+	}
+
+	var versionPayload struct {
+		Items []struct {
+			Version string `json:"version"`
+		} `json:"items"`
+	}
+	latestVersions := performJSONRequest(router, http.MethodGet, "/api/admin/wordlists/versions", nil, headers)
+	if err := json.Unmarshal(latestVersions.Body.Bytes(), &versionPayload); err != nil || len(versionPayload.Items) == 0 {
+		t.Fatalf("decode versions: %v %s", err, latestVersions.Body.String())
+	}
+	rolledBack := performJSONRequest(router, http.MethodPost, "/api/admin/wordlists/rollback/"+versionPayload.Items[0].Version, nil, headers)
+	if rolledBack.Code != http.StatusOK {
+		t.Fatalf("rollback failed: %d %s", rolledBack.Code, rolledBack.Body.String())
+	}
+	if _, ok := service.detector().sensitiveWords[AbusiveHigh]["新增测试词"]; !ok {
+		t.Fatal("rollback did not restore deleted word")
+	}
+}
+
+func TestParseImportRejectsUnknownCategory(t *testing.T) {
+	_, err := parseImport("unknown", "test", nil)
+	if err == nil {
+		t.Fatal("expected unknown category error")
+	}
+}

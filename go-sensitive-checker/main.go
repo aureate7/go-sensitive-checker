@@ -40,6 +40,8 @@ type serverConfig struct {
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
 	ReloadToken     string
+	AdminToken      string
+	DataPath        string
 	MaxMappings     int
 	MaxMappingRunes int
 }
@@ -87,6 +89,8 @@ func loadServerConfig() serverConfig {
 		IdleTimeout:     time.Duration(envInt("SENSITIVE_IDLE_TIMEOUT_SECONDS", 60)) * time.Second,
 		ShutdownTimeout: time.Duration(envInt("SENSITIVE_SHUTDOWN_TIMEOUT_SECONDS", 10)) * time.Second,
 		ReloadToken:     strings.TrimSpace(envStr("SENSITIVE_RELOAD_TOKEN", "")),
+		AdminToken:      strings.TrimSpace(envStr("SENSITIVE_ADMIN_TOKEN", envStr("SENSITIVE_RELOAD_TOKEN", ""))),
+		DataPath:        envStr("SENSITIVE_DATA_PATH", "data"),
 		MaxMappings:     envInt("SENSITIVE_MAX_CUSTOM_MAPPINGS", 500),
 		MaxMappingRunes: envInt("SENSITIVE_MAX_MAPPING_RUNES", 128),
 	}
@@ -201,7 +205,7 @@ func newRouter(service *detectorService, cfg serverConfig) *gin.Engine {
 		detector := service.detector()
 		c.JSON(http.StatusOK, gin.H{
 			"wordlist":     detector.WordListStatus(),
-			"capabilities": gin.H{"llm_assist": detector.config.EnableLLMAssist, "hot_reload": cfg.ReloadToken != ""},
+			"capabilities": gin.H{"llm_assist": detector.config.EnableLLMAssist, "hot_reload": cfg.ReloadToken != "", "wordlist_admin": cfg.AdminToken != ""},
 			"limits":       gin.H{"max_body_bytes": cfg.MaxBodyBytes, "max_text_runes": cfg.MaxTextRunes, "max_concurrent": cfg.MaxConcurrent, "max_custom_mappings": cfg.MaxMappings},
 			"metrics":      gin.H{"detect_total": service.detectTotal.Load(), "detect_errors": service.detectErrors.Load(), "busy_rejected": service.busyRejected.Load(), "reload_total": service.reloadTotal.Load()},
 		})
@@ -219,6 +223,9 @@ func newRouter(service *detectorService, cfg serverConfig) *gin.Engine {
 			}
 			c.JSON(http.StatusOK, gin.H{"reloaded": true, "wordlist": status})
 		})
+	}
+	if cfg.AdminToken != "" {
+		registerAdminRoutes(r, newAdminManager(service, cfg.DataPath), cfg.AdminToken)
 	}
 	r.GET("/health/live", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "alive"}) })
 	r.GET("/health/ready", func(c *gin.Context) {

@@ -43,6 +43,8 @@ __screenshots__/
 go-sensitive-checker/temp/
 go-sensitive-checker/sensitiveChecker
 go-sensitive-checker/*.log
+go-sensitive-checker/data/
+data/
 
 附件佐证材料（原创开源软件）.md
 附件佐证材料（原创开源软件）.docx

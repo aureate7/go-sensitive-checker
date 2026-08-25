@@ -8,6 +8,11 @@ const routes = [
     name: 'Home',
     component: Home,
   },
+  {
+    path: '/admin',
+    name: 'Admin',
+    component: () => import('@/pages/Admin.vue'),
+  },
 ]
 
 const router = createRouter({

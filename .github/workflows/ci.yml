@@ -19,7 +19,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      - run: npm test
       - run: npm run build
+      - run: npm audit --audit-level=high
 
   backend:
     runs-on: ubuntu-latest
