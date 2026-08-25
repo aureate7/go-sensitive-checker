@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"log"
 	"net/http"
@@ -9,6 +12,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -34,6 +39,39 @@ type serverConfig struct {
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
+	ReloadToken     string
+	MaxMappings     int
+	MaxMappingRunes int
+}
+
+type detectorService struct {
+	current      atomic.Pointer[Detector]
+	reloadMu     sync.Mutex
+	detectTotal  atomic.Uint64
+	detectErrors atomic.Uint64
+	busyRejected atomic.Uint64
+	reloadTotal  atomic.Uint64
+}
+
+func newDetectorService(detector *Detector) *detectorService {
+	service := &detectorService{}
+	service.current.Store(detector)
+	return service
+}
+
+func (s *detectorService) detector() *Detector { return s.current.Load() }
+
+func (s *detectorService) reload() WordListStatus {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	current := s.detector()
+	next := NewDetectorWithConfig(current.basePath, current.config)
+	status := next.WordListStatus()
+	if status.Ready {
+		s.current.Store(next)
+		s.reloadTotal.Add(1)
+	}
+	return status
 }
 
 func loadServerConfig() serverConfig {
@@ -48,6 +86,9 @@ func loadServerConfig() serverConfig {
 		WriteTimeout:    time.Duration(envInt("SENSITIVE_WRITE_TIMEOUT_SECONDS", 30)) * time.Second,
 		IdleTimeout:     time.Duration(envInt("SENSITIVE_IDLE_TIMEOUT_SECONDS", 60)) * time.Second,
 		ShutdownTimeout: time.Duration(envInt("SENSITIVE_SHUTDOWN_TIMEOUT_SECONDS", 10)) * time.Second,
+		ReloadToken:     strings.TrimSpace(envStr("SENSITIVE_RELOAD_TOKEN", "")),
+		MaxMappings:     envInt("SENSITIVE_MAX_CUSTOM_MAPPINGS", 500),
+		MaxMappingRunes: envInt("SENSITIVE_MAX_MAPPING_RUNES", 128),
 	}
 }
 
@@ -63,23 +104,35 @@ func splitCSV(raw string) []string {
 }
 
 func normalizedServerConfig(cfg serverConfig) serverConfig {
-	if cfg.MaxBodyBytes <= 0 { cfg.MaxBodyBytes = 1 << 20 }
-	if cfg.MaxTextRunes <= 0 { cfg.MaxTextRunes = 20000 }
-	if cfg.MaxConcurrent <= 0 { cfg.MaxConcurrent = 8 }
+	if cfg.MaxBodyBytes <= 0 {
+		cfg.MaxBodyBytes = 1 << 20
+	}
+	if cfg.MaxTextRunes <= 0 {
+		cfg.MaxTextRunes = 20000
+	}
+	if cfg.MaxConcurrent <= 0 {
+		cfg.MaxConcurrent = 8
+	}
+	if cfg.MaxMappings <= 0 {
+		cfg.MaxMappings = 500
+	}
+	if cfg.MaxMappingRunes <= 0 {
+		cfg.MaxMappingRunes = 128
+	}
 	return cfg
 }
 
-func newRouter(detector *Detector, cfg serverConfig) *gin.Engine {
+func newRouter(service *detectorService, cfg serverConfig) *gin.Engine {
 	cfg = normalizedServerConfig(cfg)
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery(), securityHeaders())
+	r.Use(requestIDMiddleware(), gin.Logger(), gin.Recovery(), securityHeaders())
 	_ = r.SetTrustedProxies(nil)
 	if len(cfg.AllowedOrigins) > 0 {
 		r.Use(cors.New(cors.Config{
 			AllowOrigins: cfg.AllowedOrigins,
 			AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodOptions},
 			AllowHeaders: []string{"Content-Type", "Authorization"},
-			MaxAge: 12 * time.Hour,
+			MaxAge:       12 * time.Hour,
 		}))
 	}
 
@@ -93,8 +146,11 @@ func newRouter(detector *Detector, cfg serverConfig) *gin.Engine {
 
 	semaphore := make(chan struct{}, cfg.MaxConcurrent)
 	r.POST("/api/detect", func(c *gin.Context) {
+		service.detectTotal.Add(1)
+		detector := service.detector()
 		if !detector.WordListStatus().Ready {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "word list is not ready"})
+			service.detectErrors.Add(1)
+			writeAPIError(c, http.StatusServiceUnavailable, "WORDLIST_NOT_READY", "词库尚未就绪", nil)
 			return
 		}
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, cfg.MaxBodyBytes)
@@ -102,18 +158,27 @@ func newRouter(detector *Detector, cfg serverConfig) *gin.Engine {
 		if err := c.ShouldBindJSON(&req); err != nil {
 			var maxBytesErr *http.MaxBytesError
 			if errors.As(err, &maxBytesErr) {
-				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body exceeds configured limit"})
+				service.detectErrors.Add(1)
+				writeAPIError(c, http.StatusRequestEntityTooLarge, "BODY_TOO_LARGE", "请求体超过限制", gin.H{"max_body_bytes": cfg.MaxBodyBytes})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+			service.detectErrors.Add(1)
+			writeAPIError(c, http.StatusBadRequest, "INVALID_JSON", "请求体不是有效 JSON", nil)
 			return
 		}
 		if strings.TrimSpace(req.Text) == "" {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "text is required"})
+			service.detectErrors.Add(1)
+			writeAPIError(c, http.StatusUnprocessableEntity, "TEXT_REQUIRED", "检测文本不能为空", nil)
 			return
 		}
 		if utf8.RuneCountInString(req.Text) > cfg.MaxTextRunes {
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "text exceeds configured limit", "max_text_runes": cfg.MaxTextRunes})
+			service.detectErrors.Add(1)
+			writeAPIError(c, http.StatusRequestEntityTooLarge, "TEXT_TOO_LARGE", "检测文本超过字符限制", gin.H{"max_text_runes": cfg.MaxTextRunes})
+			return
+		}
+		if validationErr := validateDetectRequest(req, cfg); validationErr != nil {
+			service.detectErrors.Add(1)
+			writeAPIError(c, http.StatusUnprocessableEntity, validationErr.Code, validationErr.Message, validationErr.Details)
 			return
 		}
 		select {
@@ -122,24 +187,86 @@ func newRouter(detector *Detector, cfg serverConfig) *gin.Engine {
 		case <-c.Request.Context().Done():
 			return
 		default:
+			service.busyRejected.Add(1)
 			c.Header("Retry-After", "1")
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": "server is busy"})
+			writeAPIError(c, http.StatusTooManyRequests, "SERVER_BUSY", "服务器繁忙，请稍后重试", nil)
 			return
 		}
 		c.JSON(http.StatusOK, detector.DetectWithContext(c.Request.Context(), req.Text, req.Categories, req.Options))
 	})
 
-	r.GET("/api/statistics", func(c *gin.Context) { c.JSON(http.StatusOK, detector.Statistics()) })
+	r.GET("/api/statistics", func(c *gin.Context) { c.JSON(http.StatusOK, service.detector().Statistics()) })
 	r.GET("/api/categories", func(c *gin.Context) { c.JSON(http.StatusOK, CategoryDisplay) })
+	r.GET("/api/status", func(c *gin.Context) {
+		detector := service.detector()
+		c.JSON(http.StatusOK, gin.H{
+			"wordlist":     detector.WordListStatus(),
+			"capabilities": gin.H{"llm_assist": detector.config.EnableLLMAssist, "hot_reload": cfg.ReloadToken != ""},
+			"limits":       gin.H{"max_body_bytes": cfg.MaxBodyBytes, "max_text_runes": cfg.MaxTextRunes, "max_concurrent": cfg.MaxConcurrent, "max_custom_mappings": cfg.MaxMappings},
+			"metrics":      gin.H{"detect_total": service.detectTotal.Load(), "detect_errors": service.detectErrors.Load(), "busy_rejected": service.busyRejected.Load(), "reload_total": service.reloadTotal.Load()},
+		})
+	})
+	if cfg.ReloadToken != "" {
+		r.POST("/api/admin/wordlist/reload", func(c *gin.Context) {
+			if subtleTokenMismatch(c.GetHeader("Authorization"), cfg.ReloadToken) {
+				writeAPIError(c, http.StatusUnauthorized, "UNAUTHORIZED", "无权执行词库重载", nil)
+				return
+			}
+			status := service.reload()
+			if !status.Ready {
+				writeAPIError(c, http.StatusUnprocessableEntity, "WORDLIST_RELOAD_FAILED", "新词库校验失败，当前词库保持不变", status)
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"reloaded": true, "wordlist": status})
+		})
+	}
 	r.GET("/health/live", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "alive"}) })
 	r.GET("/health/ready", func(c *gin.Context) {
-		status := detector.WordListStatus()
+		status := service.detector().WordListStatus()
 		code := http.StatusOK
-		if !status.Ready { code = http.StatusServiceUnavailable }
+		if !status.Ready {
+			code = http.StatusServiceUnavailable
+		}
 		c.JSON(code, status)
 	})
 	r.GET("/ping", func(c *gin.Context) { c.String(http.StatusOK, "pong") })
 	return r
+}
+
+type apiValidationError struct {
+	Code, Message string
+	Details       any
+}
+
+func validateDetectRequest(req detectReq, cfg serverConfig) *apiValidationError {
+	if len(req.Categories) == 0 {
+		return &apiValidationError{Code: "CATEGORIES_REQUIRED", Message: "至少选择一个检测类别"}
+	}
+	seen := make(map[string]struct{}, len(req.Categories))
+	for _, category := range req.Categories {
+		if _, ok := CategoryDisplay[category]; !ok {
+			return &apiValidationError{Code: "INVALID_CATEGORY", Message: "包含未知检测类别", Details: gin.H{"category": category}}
+		}
+		if _, ok := seen[category]; ok {
+			return &apiValidationError{Code: "DUPLICATE_CATEGORY", Message: "检测类别不能重复", Details: gin.H{"category": category}}
+		}
+		seen[category] = struct{}{}
+	}
+	if req.Options == nil {
+		return nil
+	}
+	if len(req.Options.CustomMappings) > cfg.MaxMappings {
+		return &apiValidationError{Code: "TOO_MANY_MAPPINGS", Message: "自定义映射数量超过限制", Details: gin.H{"max_custom_mappings": cfg.MaxMappings}}
+	}
+	if req.Options.MappingMode != "" && req.Options.MappingMode != MappingModeIncremental && req.Options.MappingMode != MappingModeOverride {
+		return &apiValidationError{Code: "INVALID_MAPPING_MODE", Message: "映射模式无效"}
+	}
+	for index, mapping := range req.Options.CustomMappings {
+		if strings.TrimSpace(mapping.From) == "" || strings.TrimSpace(mapping.To) == "" || utf8.RuneCountInString(mapping.From) > cfg.MaxMappingRunes || utf8.RuneCountInString(mapping.To) > cfg.MaxMappingRunes {
+			return &apiValidationError{Code: "INVALID_MAPPING", Message: "自定义映射包含空值或超长内容", Details: gin.H{"index": index, "max_mapping_runes": cfg.MaxMappingRunes}}
+		}
+	}
+	return nil
 }
 
 func securityHeaders() gin.HandlerFunc {
@@ -151,15 +278,57 @@ func securityHeaders() gin.HandlerFunc {
 	}
 }
 
+func requestIDMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		requestID := strings.TrimSpace(c.GetHeader("X-Request-ID"))
+		if requestID == "" || len(requestID) > 128 {
+			var raw [12]byte
+			if _, err := rand.Read(raw[:]); err == nil {
+				requestID = hex.EncodeToString(raw[:])
+			} else {
+				requestID = time.Now().UTC().Format("20060102150405.000000000")
+			}
+		}
+		c.Set("request_id", requestID)
+		c.Header("X-Request-ID", requestID)
+		c.Next()
+	}
+}
+
+func writeAPIError(c *gin.Context, status int, code, message string, details any) {
+	payload := gin.H{
+		"error": gin.H{
+			"code":       code,
+			"message":    message,
+			"request_id": c.GetString("request_id"),
+		},
+	}
+	if details != nil {
+		payload["error"].(gin.H)["details"] = details
+	}
+	c.JSON(status, payload)
+}
+
+func subtleTokenMismatch(header, expected string) bool {
+	provided := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+	if len(provided) != len(expected) {
+		return true
+	}
+	return subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1
+}
+
 func main() {
 	cfg := normalizedServerConfig(loadServerConfig())
 	detector := NewDetector(cfg.WordListPath)
+	service := newDetectorService(detector)
 	status := detector.WordListStatus()
 	log.Printf("word list status: ready=%t words=%d loaded_files=%d missing_files=%d path=%s", status.Ready, status.TotalWords, status.LoadedFiles, status.MissingFiles, status.BasePath)
-	for _, loadErr := range status.Errors { log.Printf("word list error: %s", loadErr) }
+	for _, loadErr := range status.Errors {
+		log.Printf("word list error: %s", loadErr)
+	}
 
 	server := &http.Server{
-		Addr: cfg.Address, Handler: newRouter(detector, cfg),
+		Addr: cfg.Address, Handler: newRouter(service, cfg),
 		ReadTimeout: cfg.ReadTimeout, ReadHeaderTimeout: cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout, IdleTimeout: cfg.IdleTimeout,
 	}
@@ -175,7 +344,9 @@ func main() {
 	case sig := <-signals:
 		log.Printf("received signal %s; shutting down", sig)
 	case err := <-serverErrors:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) { log.Fatalf("server stopped unexpectedly: %v", err) }
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server stopped unexpectedly: %v", err)
+		}
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)

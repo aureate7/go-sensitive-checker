@@ -16,6 +16,8 @@
           :rows="8"
           class="dark-textarea"
           placeholder="请输入要检测的文本内容..."
+          :maxlength="props.limits?.max_text_runes || undefined"
+          show-word-limit
         />
       </el-form-item>
 
@@ -137,9 +139,10 @@
                 <template #content>
                   <div class="mapping-help-pop">
                     <div>
-                      1. 开启后，将会在规则检测完成后调用 DeepSeek-V4-Flash 进行辅助风险评估。
+                      1. 开启后，将在规则检测完成后把部分原文发送到管理员配置的模型服务。
                     </div>
                     <div>2. 辅助结论不会替代规则引擎结果，可用于二次复核与边界文本判断。</div>
+                    <div>3. 请仅在已完成隐私告知并获得授权时开启。</div>
                   </div>
                 </template>
                 <span class="rate-help-trigger">
@@ -152,10 +155,11 @@
               inline-prompt
               active-text="开"
               inactive-text="关"
+              :disabled="!props.llmEnabled"
             />
           </div>
           <p class="mapping-help">
-            建议在规则命中边界场景中开启，用于补充“是否建议人工复核”的判断。
+            {{ props.llmEnabled ? '会向配置的第三方模型发送部分原文，仅建议在获得授权后开启。' : '服务端未启用大模型辅助鉴别。' }}
           </p>
         </div>
       </el-form-item>
@@ -167,20 +171,27 @@
           <el-button
             type="primary"
             :loading="props.loading"
-            :disabled="!text.trim() || selectedKeys.length === 0"
+            :disabled="!props.serviceReady || !text.trim() || selectedKeys.length === 0"
             @click="handleSubmit"
           >
             {{ props.loading ? '检测中...' : '开始检测' }}
           </el-button>
+          <el-button v-if="props.loading" type="danger" plain @click="emit('cancel')">取消</el-button>
         </el-space>
       </el-form-item>
+      <el-alert
+        v-if="!props.serviceReady"
+        type="warning"
+        :closable="false"
+        description="检测服务或词库尚未就绪，请检查后端状态。"
+      />
     </el-form>
   </el-card>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import axios from 'axios'
+import { fetchCategories } from '@/services/api'
 import { QuestionFilled } from '@element-plus/icons-vue'
 
 const props = defineProps({
@@ -188,9 +199,12 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  serviceReady: { type: Boolean, default: false },
+  limits: { type: Object, default: () => ({}) },
+  llmEnabled: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['detect'])
+const emit = defineEmits(['detect', 'cancel'])
 
 const text = ref('')
 const categories = ref({})
@@ -209,12 +223,10 @@ const inputId = `el-id-${Math.random().toString(36).substr(2, 9)}`
 // 加载类别（初始状态：不选任何一个）
 onMounted(async () => {
   try {
-    const resp = await axios.get('/api/categories')
-    categories.value = resp.data || {}
+    categories.value = (await fetchCategories()) || {}
     selectedKeys.value = [] // 初始不选
-    console.log('CategoryPanel 加载类别:', categories.value)
-  } catch (e) {
-    console.error('加载类别失败', e)
+  } catch {
+    mappingParseError.value = '检测类别加载失败，请刷新页面重试。'
   }
 })
 
@@ -239,12 +251,6 @@ const handleSubmit = () => {
     mapping_mode: mappingMode.value,
     custom_mappings: customMappings.value,
   }
-
-  console.log('CategoryPanel emit detect:', {
-    textPreview: text.value.slice(0, 30) + '...',
-    categories: selectedKeys.value,
-    options,
-  })
 
   emit('detect', {
     text: text.value,
@@ -317,6 +323,13 @@ const handleMappingFileChange = async (event) => {
   try {
     const content = await file.text()
     const { pairs, invalidCount } = parseMappingText(content)
+    const maxMappings = Number(props.limits?.max_custom_mappings || 500)
+    if (pairs.length > maxMappings) {
+      mappingParseError.value = `映射数量为 ${pairs.length}，超过服务端上限 ${maxMappings}。`
+      customMappings.value = []
+      mappingFileName.value = file.name
+      return
+    }
     if (!pairs.length) {
       mappingParseError.value = '未解析到有效映射，请检查文件格式。'
       customMappings.value = []

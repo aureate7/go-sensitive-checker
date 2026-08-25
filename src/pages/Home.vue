@@ -12,6 +12,10 @@
       </div>
 
       <div class="hero-meta">
+        <div :class="['meta-pill', { 'meta-pill--error': serviceStatus && !serviceReady }]">
+          <span :class="['dot', serviceReady ? 'dot-green' : 'dot-red']"></span>
+          {{ serviceStatusText }}
+        </div>
         <div class="meta-pill">
           <span class="dot"></span> 实时检测
         </div>
@@ -64,7 +68,14 @@
             >检测中…</span>
           </div>
 
-          <CategoryPanel @detect="handleDetect" />
+          <CategoryPanel
+            :loading="loading"
+            :service-ready="serviceReady"
+            :limits="serviceStatus?.limits"
+            :llm-enabled="!!serviceStatus?.capabilities?.llm_assist"
+            @detect="handleDetect"
+            @cancel="cancelDetect"
+          />
         </section>
 
         <!-- 结果区 -->
@@ -106,8 +117,8 @@
 <script setup>
 defineOptions({ name: 'DetectionHome' })
 
-import { computed, ref, nextTick } from 'vue'
-import axios from 'axios'
+import { computed, ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { describeAPIError, detectText, fetchServiceStatus } from '@/services/api'
 
 import StatisticsCard from '@/components/StatisticsCard.vue'
 import CategoryPanel from '@/components/CategoryPanel.vue'
@@ -118,6 +129,29 @@ const loading = ref(false)
 const result = ref(null)
 const originalText = ref('')
 const resultPanel = ref(null)
+const serviceStatus = ref(null)
+const statusError = ref('')
+let activeController = null
+
+const serviceReady = computed(() => !!serviceStatus.value?.wordlist?.ready)
+const serviceStatusText = computed(() => {
+  if (statusError.value) return '服务不可用'
+  if (!serviceStatus.value) return '连接服务中'
+  if (!serviceReady.value) return '词库未就绪'
+  return `词库 ${Number(serviceStatus.value.wordlist.total_words || 0).toLocaleString()} 词`
+})
+
+const loadStatus = async () => {
+  try {
+    serviceStatus.value = await fetchServiceStatus()
+    statusError.value = ''
+  } catch (error) {
+    statusError.value = describeAPIError(error).message
+  }
+}
+
+onMounted(loadStatus)
+onBeforeUnmount(() => activeController?.abort())
 
 const riskLevelText = computed(() => {
   if (!result.value) return '--'
@@ -167,22 +201,27 @@ const handleDetect = async ({ text, categories, options }) => {
 
   loading.value = true
   originalText.value = text
+  activeController?.abort()
+  activeController = new AbortController()
+  const requestController = activeController
 
   try {
-    const resp = await axios.post('/api/detect', {
+    result.value = await detectText({
       text,
       categories,
       options,
-    })
-    result.value = resp.data
+    }, requestController.signal)
   } catch (err) {
-    console.error('检测失败', err)
+    const apiError = describeAPIError(err)
     result.value = {
       has_sensitive: false,
-      error: err.message || '检测失败',
+      error: `${apiError.message}${apiError.requestId ? `（请求 ID：${apiError.requestId}）` : ''}`,
     }
   } finally {
-    loading.value = false
+    if (activeController === requestController) {
+      loading.value = false
+      activeController = null
+    }
 
     // 等 DOM 更新完，再滚动
     await nextTick()
@@ -206,6 +245,8 @@ const handleDetect = async ({ text, categories, options }) => {
 
   }
 }
+
+const cancelDetect = () => activeController?.abort()
 </script>
 
 <style scoped>
@@ -279,6 +320,12 @@ const handleDetect = async ({ text, categories, options }) => {
 }
 .dot-green {
   background: #22c55e;
+}
+.dot-red {
+  background: #ef4444;
+}
+.meta-pill--error {
+  border-color: rgba(239, 68, 68, 0.55);
 }
 
 /* 主体两栏布局整体壳子 */

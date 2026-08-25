@@ -357,6 +357,36 @@ go test ./...
 - `GET /health/ready`：返回词库路径、加载文件数、缺失文件数、总词数和分类词数；未就绪时返回 HTTP 503。
 - `GET /ping` -> `pong`：保留用于兼容旧版探针。
 
+### 5) 服务状态
+
+`GET /api/status` 返回当前词库、服务能力、请求限制与进程内运行计数。前端使用该接口展示真实词库数量，并在词库未就绪时禁止提交检测。
+
+### 6) 热重载词库
+
+仅在配置 `SENSITIVE_RELOAD_TOKEN` 后启用：
+
+```bash
+curl -X POST http://localhost:8008/api/admin/wordlist/reload \
+  -H "Authorization: Bearer $SENSITIVE_RELOAD_TOKEN"
+```
+
+后端会先在内存中完整构建并校验新检测器，成功后原子切换；新词库无效时返回 422，继续使用旧词库，不中断正在执行的请求。
+
+### API 错误格式
+
+参数、容量和服务状态错误使用稳定错误码，并在响应头及响应体中返回请求 ID：
+
+```json
+{
+  "error": {
+    "code": "INVALID_CATEGORY",
+    "message": "包含未知检测类别",
+    "request_id": "4f37d9c64f2646fb9a0d73e9",
+    "details": { "category": "unknown" }
+  }
+}
+```
+
 ---
 
 ## 词组映射文件格式
@@ -415,6 +445,9 @@ s b = sb
 | `SENSITIVE_WRITE_TIMEOUT_SECONDS` | `30` | HTTP 写入超时 |
 | `SENSITIVE_IDLE_TIMEOUT_SECONDS` | `60` | HTTP 空闲连接超时 |
 | `SENSITIVE_SHUTDOWN_TIMEOUT_SECONDS` | `10` | 优雅停机等待时间 |
+| `SENSITIVE_RELOAD_TOKEN` | 空 | 词库热重载管理令牌；为空时不注册管理接口 |
+| `SENSITIVE_MAX_CUSTOM_MAPPINGS` | `500` | 单次请求允许的自定义映射数量 |
+| `SENSITIVE_MAX_MAPPING_RUNES` | `128` | 单个映射源或目标的最大字符数 |
 
 ---
 

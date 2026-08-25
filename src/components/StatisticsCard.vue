@@ -4,7 +4,9 @@
       <span class="title">敏感词库统计</span>
     </div>
 
-    <div class="stats-list">
+    <el-alert v-if="error" type="warning" :closable="false" :description="error" />
+    <el-skeleton v-if="loading" :rows="5" animated />
+    <div v-else class="stats-list">
       <div class="stats-row" v-for="item in items" :key="item.label">
         <span class="label">{{ item.label }}</span>
         <span class="value">{{ format(item.value) }}</span>
@@ -14,18 +16,25 @@
 </template>
 
 <script setup>
+import { computed, onMounted, ref } from 'vue'
+import { fetchStatistics } from '@/services/api'
 
-
-const items = [
-  { label: "总计", value: 833926 },
-  { label: "涉黄类敏感词", value: 301770 },
-  { label: "广告敏感词", value: 234175 },
-  { label: "辱骂类敏感词", value: 224009 },
-  { label: "暴恐类敏感词", value: 60025 },
-  { label: "政治敏感词", value: 13947 },
+const statistics = ref({})
+const loading = ref(true)
+const error = ref('')
+const definitions = [
+  ['总计', 'total'], ['涉黄类敏感词', 'pornographic'], ['广告敏感词', 'advertising'],
+  ['辱骂类敏感词', 'abusive'], ['暴恐类敏感词', 'violent'], ['政治敏感词', 'political'],
 ]
+const items = computed(() => definitions.map(([label, key]) => ({ label, value: statistics.value[key] || 0 })))
 
-const format = (n) => n.toLocaleString()
+onMounted(async () => {
+  try { statistics.value = await fetchStatistics() }
+  catch { error.value = '词库统计暂时不可用' }
+  finally { loading.value = false }
+})
+
+const format = (n) => Number(n || 0).toLocaleString()
 </script>
 
 <style scoped>
