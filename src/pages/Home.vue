@@ -104,6 +104,8 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'DetectionHome' })
+
 import { computed, ref, nextTick } from 'vue'
 import axios from 'axios'
 

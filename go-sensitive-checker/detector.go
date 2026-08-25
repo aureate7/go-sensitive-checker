@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -61,6 +63,17 @@ type Detector struct {
 	fuzzyMatcher  *FuzzyMatcher
 	pinyinMatcher *PinyinMatcher
 	llmAssist     *llmAssistClient
+	loadStatus    WordListStatus
+}
+
+type WordListStatus struct {
+	Ready          bool           `json:"ready"`
+	BasePath       string         `json:"base_path"`
+	TotalWords     int            `json:"total_words"`
+	LoadedFiles    int            `json:"loaded_files"`
+	MissingFiles   int            `json:"missing_files"`
+	CategoryCounts map[string]int `json:"category_counts"`
+	Errors         []string       `json:"errors,omitempty"`
 }
 
 func NewDetector(basePath string) *Detector {
@@ -90,6 +103,7 @@ func NewDetectorWithConfig(basePath string, cfg DetectorConfig) *Detector {
 		d.sensitiveWords[cat] = make(map[string]struct{})
 	}
 	d.loadSensitiveWords()
+	d.finalizeLoadStatus()
 	d.buildAutomata()
 	d.buildEnhancedIndexes()
 	return d
@@ -170,10 +184,17 @@ func (d *Detector) loadFiles(relPaths []string, category string) {
 		full := filepath.Join(d.basePath, p)
 		f, err := os.Open(full)
 		if err != nil {
-			// 文件不存在也允许启动
+			if errors.Is(err, os.ErrNotExist) {
+				d.loadStatus.MissingFiles++
+			} else {
+				d.loadStatus.Errors = append(d.loadStatus.Errors, fmt.Sprintf("open %s: %v", p, err))
+			}
 			continue
 		}
+		d.loadStatus.LoadedFiles++
 		sc := bufio.NewScanner(f)
+		// 允许较长词条行，同时设置明确上限，避免异常文件无限占用内存。
+		sc.Buffer(make([]byte, 64*1024), 1024*1024)
 		for sc.Scan() {
 			w := strings.TrimSpace(sc.Text())
 			if w == "" || strings.HasPrefix(w, "#") {
@@ -181,8 +202,37 @@ func (d *Detector) loadFiles(relPaths []string, category string) {
 			}
 			d.sensitiveWords[category][w] = struct{}{}
 		}
+		if err := sc.Err(); err != nil {
+			d.loadStatus.Errors = append(d.loadStatus.Errors, fmt.Sprintf("scan %s: %v", p, err))
+		}
 		_ = f.Close()
 	}
+}
+
+func (d *Detector) finalizeLoadStatus() {
+	status := WordListStatus{
+		BasePath:       d.basePath,
+		LoadedFiles:    d.loadStatus.LoadedFiles,
+		MissingFiles:   d.loadStatus.MissingFiles,
+		CategoryCounts: make(map[string]int, len(d.sensitiveWords)),
+		Errors:         append([]string(nil), d.loadStatus.Errors...),
+	}
+	for category, words := range d.sensitiveWords {
+		status.CategoryCounts[category] = len(words)
+		status.TotalWords += len(words)
+	}
+	status.Ready = status.TotalWords > 0 && status.LoadedFiles > 0 && len(status.Errors) == 0
+	d.loadStatus = status
+}
+
+func (d *Detector) WordListStatus() WordListStatus {
+	status := d.loadStatus
+	status.CategoryCounts = make(map[string]int, len(d.loadStatus.CategoryCounts))
+	for category, count := range d.loadStatus.CategoryCounts {
+		status.CategoryCounts[category] = count
+	}
+	status.Errors = append([]string(nil), d.loadStatus.Errors...)
+	return status
 }
 
 func (d *Detector) buildAutomata() {
@@ -291,10 +341,14 @@ func runeCount(s string) int {
 }
 
 func (d *Detector) Detect(text string, categories []string) DetectResponse {
-	return d.DetectWithOptions(text, categories, nil)
+	return d.DetectWithContext(context.Background(), text, categories, nil)
 }
 
 func (d *Detector) DetectWithOptions(text string, categories []string, options *DetectOptions) DetectResponse {
+	return d.DetectWithContext(context.Background(), text, categories, options)
+}
+
+func (d *Detector) DetectWithContext(ctx context.Context, text string, categories []string, options *DetectOptions) DetectResponse {
 	cats := d.resolveCategories(categories)
 	applied := d.resolveOptions(options)
 
@@ -571,7 +625,7 @@ func (d *Detector) DetectWithOptions(text string, categories []string, options *
 		case d.llmAssist == nil:
 			llmReport.Error = "llm assist client not initialized"
 		default:
-			llmResult, err := d.llmAssist.Analyze(context.Background(), text, cats, resp)
+			llmResult, err := d.llmAssist.Analyze(ctx, text, cats, resp)
 			if err != nil {
 				llmReport.Error = err.Error()
 			} else {

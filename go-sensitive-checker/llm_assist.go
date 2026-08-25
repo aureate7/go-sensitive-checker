@@ -173,7 +173,7 @@ func (c *llmAssistClient) Analyze(ctx context.Context, text string, categories [
 		return LLMAssistResult{}, fmt.Errorf("read llm response failed: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return LLMAssistResult{}, fmt.Errorf("llm api error status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBytes)))
+		return LLMAssistResult{}, fmt.Errorf("llm api returned status %d", resp.StatusCode)
 	}
 
 	var chatResp llmAssistChatResponse

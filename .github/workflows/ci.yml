@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [v2]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go-sensitive-checker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-sensitive-checker/go.mod
+          cache-dependency-path: go-sensitive-checker/go.sum
+      - run: go test -race ./...
+      - run: go vet ./...

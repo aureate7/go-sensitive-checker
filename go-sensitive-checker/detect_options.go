@@ -77,7 +77,7 @@ func DefaultDetectorConfig(basePath string) DetectorConfig {
 		EnableAutoPinyin:     envBool("SENSITIVE_ENABLE_AUTO_PINYIN", true),
 		EnablePinyinInitials: envBool("SENSITIVE_ENABLE_PINYIN_INITIALS", false),
 		PinyinAliasPath:      envStr("SENSITIVE_PINYIN_ALIAS_FILE", basePath+"/拼音混淆词/拼音映射.txt"),
-		EnableLLMAssist:      envBool("SENSITIVE_ENABLE_LLM_ASSIST", true),
+		EnableLLMAssist:      envBool("SENSITIVE_ENABLE_LLM_ASSIST", false),
 		LLMAPIBaseURL:        strings.TrimRight(envStr("SENSITIVE_LLM_API_BASE_URL", "https://api.deepseek.com"), "/"),
 		LLMAPIKey:            strings.TrimSpace(envStr("SENSITIVE_LLM_API_KEY", "")),
 		LLMModel:             strings.TrimSpace(envStr("SENSITIVE_LLM_MODEL", "deepseek-v4-flash")),

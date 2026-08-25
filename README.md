@@ -127,7 +127,7 @@ AC 自动机 + 归一化 + 模糊/拼音别名索引
 - Node.js：`^20.19.0 || >=22.12.0`
 - Go：`1.23+`
 
-### 0) 配置 DeepSeek（推荐）
+### 0) 配置 DeepSeek（可选，默认关闭）
 
 在启动后端前，先在终端配置大模型环境变量：
 
@@ -135,9 +135,10 @@ AC 自动机 + 归一化 + 模糊/拼音别名索引
 export SENSITIVE_LLM_API_BASE_URL="https://api.deepseek.com"
 export SENSITIVE_LLM_API_KEY="你的DeepSeekKey"
 export SENSITIVE_LLM_MODEL="deepseek-v4-flash"
+export SENSITIVE_ENABLE_LLM_ASSIST="true"
 ```
 
-> 提示：请勿将真实 `API Key` 提交到 Git 仓库。  
+> 提示：启用后，用户选择“大模型辅助鉴别”会把最多 `SENSITIVE_LLM_MAX_TEXT_RUNES` 个字符发送到所配置的第三方服务。请先完成隐私告知与授权，并勿将真实 `API Key` 提交到 Git 仓库。
 > 如果你使用自建网关或代理地址，改 `SENSITIVE_LLM_API_BASE_URL` 即可。
 
 ### 1) 启动后端（Go）
@@ -151,7 +152,8 @@ go run .
 启动后默认地址：
 
 - API 服务：[http://localhost:8008](http://localhost:8008)
-- 健康检查：[http://localhost:8008/ping](http://localhost:8008/ping)
+- 存活检查：[http://localhost:8008/health/live](http://localhost:8008/health/live)
+- 就绪检查：[http://localhost:8008/health/ready](http://localhost:8008/health/ready)（词库为空或读取失败时返回 503）
 
 ### 2) 启动前端（Vue）
 
@@ -351,7 +353,9 @@ go test ./...
 
 ### 4) 健康检查
 
-`GET /ping` -> `pong`
+- `GET /health/live`：进程存活检查。
+- `GET /health/ready`：返回词库路径、加载文件数、缺失文件数、总词数和分类词数；未就绪时返回 HTTP 503。
+- `GET /ping` -> `pong`：保留用于兼容旧版探针。
 
 ---
 
@@ -395,12 +399,22 @@ s b = sb
 | `SENSITIVE_ENABLE_AUTO_PINYIN` | `true` | 自动为汉字词生成拼音别名 |
 | `SENSITIVE_ENABLE_PINYIN_INITIALS` | `false` | 启用拼音首字母别名 |
 | `SENSITIVE_PINYIN_ALIAS_FILE` | `temp/拼音混淆词/拼音映射.txt` | 自定义拼音别名文件路径 |
-| `SENSITIVE_ENABLE_LLM_ASSIST` | `true` | 是否允许启用 LLM 辅助鉴别 |
+| `SENSITIVE_ENABLE_LLM_ASSIST` | `false` | 是否允许启用 LLM 辅助鉴别；开启后可能向第三方发送文本 |
 | `SENSITIVE_LLM_API_BASE_URL` | `https://api.deepseek.com` | 大模型 API 基础地址（DeepSeek/OpenAI 兼容） |
 | `SENSITIVE_LLM_API_KEY` | 空 | 大模型 API Key |
 | `SENSITIVE_LLM_MODEL` | `deepseek-v4-flash` | 大模型名称 |
 | `SENSITIVE_LLM_TIMEOUT_MS` | `10000` | 辅助鉴别请求超时（毫秒） |
 | `SENSITIVE_LLM_MAX_TEXT_RUNES` | `1200` | 发送给大模型的最大字符数（rune） |
+| `SENSITIVE_SERVER_ADDRESS` | `:8008` | 后端监听地址 |
+| `SENSITIVE_WORDLIST_PATH` | `temp` | 词库目录 |
+| `SENSITIVE_ALLOWED_ORIGINS` | 本地 Vite 地址 | 允许跨域的来源，多个值用逗号分隔 |
+| `SENSITIVE_MAX_BODY_BYTES` | `1048576` | 检测请求体最大字节数 |
+| `SENSITIVE_MAX_TEXT_RUNES` | `20000` | 单次检测文本最大字符数 |
+| `SENSITIVE_MAX_CONCURRENT` | `8` | 同时执行的检测请求数上限 |
+| `SENSITIVE_READ_TIMEOUT_SECONDS` | `10` | HTTP 读取超时 |
+| `SENSITIVE_WRITE_TIMEOUT_SECONDS` | `30` | HTTP 写入超时 |
+| `SENSITIVE_IDLE_TIMEOUT_SECONDS` | `60` | HTTP 空闲连接超时 |
+| `SENSITIVE_SHUTDOWN_TIMEOUT_SECONDS` | `10` | 优雅停机等待时间 |
 
 ---
 
