@@ -401,6 +401,25 @@ curl -X POST http://localhost:8008/api/admin/wordlist/reload \
 
 策略、任务元数据和结果保存在 `SENSITIVE_DATA_PATH`。服务异常重启后，未完成任务会标记为 `interrupted`，已完成结果仍可下载。
 
+### 9) 白名单、组合规则与质量评测
+
+策略支持白名单短语和组合规则。白名单会在不改变 rune 位置的情况下屏蔽完整豁免片段；组合规则可以要求多个词在指定距离内共同出现，并设置风险等级与处置动作。
+
+策略每次保存自动递增版本。批量任务会保存完整策略快照和版本，任务重试继续使用原策略版本。
+
+访问 `/evaluations` 可提交标注样本并计算：
+
+- TP、FP、TN、FN
+- Precision
+- Recall
+- F1
+- 误报和漏报样本索引
+
+管理 API：
+
+- `POST /api/platform/detect`：使用指定策略检测单条文本。
+- `POST /api/platform/evaluations`：运行最多 5000 条质量评测样本。
+
 ### API 错误格式
 
 参数、容量和服务状态错误使用稳定错误码，并在响应头及响应体中返回请求 ID：

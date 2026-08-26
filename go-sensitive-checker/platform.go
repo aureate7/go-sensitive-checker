@@ -23,14 +23,34 @@ import (
 )
 
 type DetectionPolicy struct {
-	ID           string        `json:"id"`
-	Name         string        `json:"name"`
-	Categories   []string      `json:"categories"`
-	Options      DetectOptions `json:"options"`
-	MaxTextRunes int           `json:"max_text_runes"`
-	Enabled      bool          `json:"enabled"`
-	CreatedAt    time.Time     `json:"created_at"`
-	UpdatedAt    time.Time     `json:"updated_at"`
+	ID           string          `json:"id"`
+	Version      int             `json:"version"`
+	Name         string          `json:"name"`
+	Categories   []string        `json:"categories"`
+	Options      DetectOptions   `json:"options"`
+	MaxTextRunes int             `json:"max_text_runes"`
+	Enabled      bool            `json:"enabled"`
+	Whitelist    []string        `json:"whitelist,omitempty"`
+	Rules        []CompositeRule `json:"rules,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+}
+
+type CompositeRule struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Terms       []string `json:"terms"`
+	MaxDistance int      `json:"max_distance"`
+	RiskLevel   string   `json:"risk_level"`
+	Action      string   `json:"action"`
+}
+
+type CompositeRuleHit struct {
+	RuleID    string   `json:"rule_id"`
+	RuleName  string   `json:"rule_name"`
+	Terms     []string `json:"terms"`
+	RiskLevel string   `json:"risk_level"`
+	Action    string   `json:"action"`
 }
 
 type policyStore struct {
@@ -46,7 +66,7 @@ func newPolicyStore(dataPath string) (*policyStore, error) {
 	}
 	if len(store.policies) == 0 {
 		now := time.Now().UTC()
-		store.policies["default"] = DetectionPolicy{ID: "default", Name: "默认全类别策略", Categories: sortedCategories(), Options: DefaultDetectOptions(), MaxTextRunes: 20000, Enabled: true, CreatedAt: now, UpdatedAt: now}
+		store.policies["default"] = DetectionPolicy{ID: "default", Version: 1, Name: "默认全类别策略", Categories: sortedCategories(), Options: DefaultDetectOptions(), MaxTextRunes: 20000, Enabled: true, CreatedAt: now, UpdatedAt: now}
 		if err := store.saveLocked(); err != nil {
 			return nil, err
 		}
@@ -76,6 +96,9 @@ func (s *policyStore) load() error {
 		return err
 	}
 	for _, policy := range policies {
+		if policy.Version < 1 {
+			policy.Version = 1
+		}
 		s.policies[policy.ID] = policy
 	}
 	return nil
@@ -110,8 +133,10 @@ func (s *policyStore) upsert(policy DetectionPolicy) (DetectionPolicy, error) {
 	now := time.Now().UTC()
 	if existing, ok := s.policies[policy.ID]; ok {
 		policy.CreatedAt = existing.CreatedAt
+		policy.Version = existing.Version + 1
 	} else {
 		policy.CreatedAt = now
+		policy.Version = 1
 	}
 	policy.UpdatedAt = now
 	s.policies[policy.ID] = policy
@@ -176,24 +201,152 @@ func validatePolicy(policy DetectionPolicy) error {
 		}
 		seen[category] = struct{}{}
 	}
+	for _, item := range policy.Whitelist {
+		if strings.TrimSpace(item) == "" || len([]rune(item)) > 256 {
+			return fmt.Errorf("invalid whitelist item")
+		}
+	}
+	ruleIDs := map[string]struct{}{}
+	for _, rule := range policy.Rules {
+		if strings.TrimSpace(rule.ID) == "" || len(rule.Terms) < 2 {
+			return fmt.Errorf("invalid composite rule")
+		}
+		if _, exists := ruleIDs[rule.ID]; exists {
+			return fmt.Errorf("duplicate rule id %s", rule.ID)
+		}
+		ruleIDs[rule.ID] = struct{}{}
+		if rule.RiskLevel != "low" && rule.RiskLevel != "medium" && rule.RiskLevel != "high" {
+			return fmt.Errorf("invalid rule risk level")
+		}
+		for _, term := range rule.Terms {
+			if strings.TrimSpace(term) == "" {
+				return fmt.Errorf("empty rule term")
+			}
+		}
+	}
 	return nil
 }
 
+func detectWithPolicy(ctx context.Context, detector *Detector, text string, policy DetectionPolicy) DetectResponse {
+	masked := maskWhitelist(text, policy.Whitelist)
+	response := detector.DetectWithContext(ctx, masked, policy.Categories, &policy.Options)
+	response.PolicyID = policy.ID
+	response.PolicyVersion = policy.Version
+	response.PolicyRuleHits = matchCompositeRules(masked, policy.Rules)
+	for _, hit := range response.PolicyRuleHits {
+		response.HasSensitive = true
+		if riskRank(hit.RiskLevel) > riskRank(response.RiskLevel) {
+			response.RiskLevel = hit.RiskLevel
+		}
+	}
+	return response
+}
+
+func maskWhitelist(text string, whitelist []string) string {
+	runes := []rune(text)
+	masked := append([]rune(nil), runes...)
+	items := append([]string(nil), whitelist...)
+	sort.Slice(items, func(i, j int) bool { return len([]rune(items[i])) > len([]rune(items[j])) })
+	for _, item := range items {
+		needle := []rune(strings.TrimSpace(item))
+		if len(needle) == 0 {
+			continue
+		}
+		for start := 0; start+len(needle) <= len(runes); start++ {
+			match := true
+			for offset := range needle {
+				if runes[start+offset] != needle[offset] {
+					match = false
+					break
+				}
+			}
+			if match {
+				for offset := range needle {
+					masked[start+offset] = ' '
+				}
+				start += len(needle) - 1
+			}
+		}
+	}
+	return string(masked)
+}
+
+func matchCompositeRules(text string, rules []CompositeRule) []CompositeRuleHit {
+	runes := []rune(strings.ToLower(text))
+	hits := make([]CompositeRuleHit, 0)
+	for _, rule := range rules {
+		positions := make([]int, 0, len(rule.Terms))
+		matched := true
+		for _, raw := range rule.Terms {
+			position := runeIndex(runes, []rune(strings.ToLower(strings.TrimSpace(raw))))
+			if position < 0 {
+				matched = false
+				break
+			}
+			positions = append(positions, position)
+		}
+		if !matched {
+			continue
+		}
+		if rule.MaxDistance > 0 {
+			sort.Ints(positions)
+			if positions[len(positions)-1]-positions[0] > rule.MaxDistance {
+				continue
+			}
+		}
+		hits = append(hits, CompositeRuleHit{RuleID: rule.ID, RuleName: rule.Name, Terms: append([]string(nil), rule.Terms...), RiskLevel: rule.RiskLevel, Action: rule.Action})
+	}
+	return hits
+}
+
+func runeIndex(haystack, needle []rune) int {
+	if len(needle) == 0 {
+		return -1
+	}
+	for start := 0; start+len(needle) <= len(haystack); start++ {
+		match := true
+		for offset := range needle {
+			if haystack[start+offset] != needle[offset] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return start
+		}
+	}
+	return -1
+}
+
+func riskRank(level string) int {
+	switch level {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
+}
+
 type BatchTask struct {
-	ID           string     `json:"id"`
-	PolicyID     string     `json:"policy_id"`
-	Status       string     `json:"status"`
-	Total        int        `json:"total"`
-	Processed    int        `json:"processed"`
-	Sensitive    int        `json:"sensitive"`
-	Failed       int        `json:"failed"`
-	CreatedAt    time.Time  `json:"created_at"`
-	StartedAt    *time.Time `json:"started_at,omitempty"`
-	CompletedAt  *time.Time `json:"completed_at,omitempty"`
-	Error        string     `json:"error,omitempty"`
-	ParentTaskID string     `json:"parent_task_id,omitempty"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	ResultBytes  int64      `json:"result_bytes"`
+	ID            string     `json:"id"`
+	PolicyID      string     `json:"policy_id"`
+	PolicyVersion int        `json:"policy_version"`
+	Status        string     `json:"status"`
+	Total         int        `json:"total"`
+	Processed     int        `json:"processed"`
+	Sensitive     int        `json:"sensitive"`
+	Failed        int        `json:"failed"`
+	CreatedAt     time.Time  `json:"created_at"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	Error         string     `json:"error,omitempty"`
+	ParentTaskID  string     `json:"parent_task_id,omitempty"`
+	ExpiresAt     time.Time  `json:"expires_at"`
+	ResultBytes   int64      `json:"result_bytes"`
 }
 
 type batchCreateRequest struct {
@@ -284,24 +437,28 @@ func (m *taskManager) createWithParent(req batchCreateRequest, parentID string) 
 	if !ok || !policy.Enabled {
 		return BatchTask{}, fmt.Errorf("policy not found or disabled")
 	}
-	if len(req.Lines) == 0 || len(req.Lines) > m.maxLines {
+	return m.createWithPolicy(req.Lines, policy, parentID)
+}
+
+func (m *taskManager) createWithPolicy(lines []string, policy DetectionPolicy, parentID string) (BatchTask, error) {
+	if len(lines) == 0 || len(lines) > m.maxLines {
 		return BatchTask{}, fmt.Errorf("line count must be between 1 and %d", m.maxLines)
 	}
-	for _, line := range req.Lines {
+	for _, line := range lines {
 		if utf8.RuneCountInString(line) > policy.MaxTextRunes {
 			return BatchTask{}, fmt.Errorf("line exceeds policy limit")
 		}
 	}
 	used, _ := directorySize(m.path)
 	estimated := int64(0)
-	for _, line := range req.Lines {
+	for _, line := range lines {
 		estimated += int64(len(line) * 3)
 	}
 	if used+estimated > m.maxStorageBytes {
 		return BatchTask{}, fmt.Errorf("task storage limit exceeded")
 	}
 	now := time.Now().UTC()
-	task := BatchTask{ID: taskID(), PolicyID: policy.ID, Status: "queued", Total: len(req.Lines), CreatedAt: now, ParentTaskID: parentID, ExpiresAt: now.Add(m.retention)}
+	task := BatchTask{ID: taskID(), PolicyID: policy.ID, PolicyVersion: policy.Version, Status: "queued", Total: len(lines), CreatedAt: now, ParentTaskID: parentID, ExpiresAt: now.Add(m.retention)}
 	ctx, cancel := context.WithCancel(context.Background())
 	runtime := &taskRuntime{task: task, cancel: cancel}
 	m.mu.Lock()
@@ -311,12 +468,21 @@ func (m *taskManager) createWithParent(req batchCreateRequest, parentID string) 
 		cancel()
 		return BatchTask{}, err
 	}
-	inputRaw, err := json.Marshal(req.Lines)
+	inputRaw, err := json.Marshal(lines)
 	if err != nil {
 		cancel()
 		return BatchTask{}, err
 	}
 	if err := atomicWriteFile(filepath.Join(m.path, task.ID, "input.json"), inputRaw); err != nil {
+		cancel()
+		return BatchTask{}, err
+	}
+	policyRaw, err := json.Marshal(policy)
+	if err != nil {
+		cancel()
+		return BatchTask{}, err
+	}
+	if err := atomicWriteFile(filepath.Join(m.path, task.ID, "policy.json"), policyRaw); err != nil {
 		cancel()
 		return BatchTask{}, err
 	}
@@ -328,7 +494,7 @@ func (m *taskManager) createWithParent(req batchCreateRequest, parentID string) 
 		case <-ctx.Done():
 			m.finish(runtime, "cancelled", "")
 		}
-	}(append([]string(nil), req.Lines...))
+	}(append([]string(nil), lines...))
 	return task, nil
 }
 
@@ -358,7 +524,7 @@ func (m *taskManager) run(ctx context.Context, runtime *taskRuntime, policy Dete
 				if ctx.Err() != nil {
 					return
 				}
-				response := m.service.detector().DetectWithContext(ctx, job.text, policy.Categories, &policy.Options)
+				response := detectWithPolicy(ctx, m.service.detector(), job.text, policy)
 				select {
 				case results <- batchResult{Line: job.index + 1, Text: job.text, Response: &response}:
 				case <-ctx.Done():
@@ -512,7 +678,15 @@ func (m *taskManager) retry(id string) (BatchTask, error) {
 	if err := json.Unmarshal(raw, &lines); err != nil {
 		return BatchTask{}, err
 	}
-	return m.createWithParent(batchCreateRequest{PolicyID: task.PolicyID, Lines: lines}, id)
+	policyRaw, err := os.ReadFile(filepath.Join(m.path, id, "policy.json"))
+	if err != nil {
+		return BatchTask{}, err
+	}
+	var policy DetectionPolicy
+	if err := json.Unmarshal(policyRaw, &policy); err != nil {
+		return BatchTask{}, err
+	}
+	return m.createWithPolicy(lines, policy, id)
 }
 
 func (m *taskManager) delete(id string) error {
@@ -577,6 +751,76 @@ func errorText(err error) string {
 	return err.Error()
 }
 
+type evaluationSample struct {
+	Text               string   `json:"text"`
+	ExpectedSensitive  bool     `json:"expected_sensitive"`
+	ExpectedCategories []string `json:"expected_categories,omitempty"`
+}
+
+type evaluationRequest struct {
+	PolicyID string             `json:"policy_id"`
+	Samples  []evaluationSample `json:"samples"`
+}
+type evaluationFailure struct {
+	Index    int    `json:"index"`
+	Expected bool   `json:"expected"`
+	Actual   bool   `json:"actual"`
+	Reason   string `json:"reason"`
+}
+type evaluationReport struct {
+	PolicyID      string              `json:"policy_id"`
+	PolicyVersion int                 `json:"policy_version"`
+	Total         int                 `json:"total"`
+	TP            int                 `json:"tp"`
+	FP            int                 `json:"fp"`
+	TN            int                 `json:"tn"`
+	FN            int                 `json:"fn"`
+	Precision     float64             `json:"precision"`
+	Recall        float64             `json:"recall"`
+	F1            float64             `json:"f1"`
+	Failures      []evaluationFailure `json:"failures"`
+}
+
+func evaluatePolicy(ctx context.Context, detector *Detector, policy DetectionPolicy, samples []evaluationSample) (evaluationReport, error) {
+	if len(samples) == 0 || len(samples) > 5000 {
+		return evaluationReport{}, fmt.Errorf("sample count must be between 1 and 5000")
+	}
+	report := evaluationReport{PolicyID: policy.ID, PolicyVersion: policy.Version, Total: len(samples), Failures: []evaluationFailure{}}
+	for index, sample := range samples {
+		if utf8.RuneCountInString(sample.Text) > policy.MaxTextRunes {
+			return report, fmt.Errorf("sample %d exceeds policy text limit", index)
+		}
+		response := detectWithPolicy(ctx, detector, sample.Text, policy)
+		switch {
+		case sample.ExpectedSensitive && response.HasSensitive:
+			report.TP++
+		case sample.ExpectedSensitive && !response.HasSensitive:
+			report.FN++
+			report.Failures = append(report.Failures, evaluationFailure{Index: index, Expected: true, Actual: false, Reason: "漏报"})
+		case !sample.ExpectedSensitive && response.HasSensitive:
+			report.FP++
+			report.Failures = append(report.Failures, evaluationFailure{Index: index, Expected: false, Actual: true, Reason: "误报"})
+		default:
+			report.TN++
+		}
+		for _, expectedCategory := range sample.ExpectedCategories {
+			if _, ok := response.Categories[expectedCategory]; !ok {
+				report.Failures = append(report.Failures, evaluationFailure{Index: index, Expected: true, Actual: response.HasSensitive, Reason: "类别漏报: " + expectedCategory})
+			}
+		}
+	}
+	if report.TP+report.FP > 0 {
+		report.Precision = float64(report.TP) / float64(report.TP+report.FP)
+	}
+	if report.TP+report.FN > 0 {
+		report.Recall = float64(report.TP) / float64(report.TP+report.FN)
+	}
+	if report.Precision+report.Recall > 0 {
+		report.F1 = 2 * report.Precision * report.Recall / (report.Precision + report.Recall)
+	}
+	return report, nil
+}
+
 func registerPlatformRoutes(r *gin.Engine, service *detectorService, token, dataPath string, maxLines, workers, maxConcurrentTasks int, retention time.Duration, maxStorageBytes int64) error {
 	policies, err := newPolicyStore(dataPath)
 	if err != nil {
@@ -593,6 +837,44 @@ func registerPlatformRoutes(r *gin.Engine, service *detectorService, token, data
 	admin := r.Group("/api/platform")
 	admin.Use(adminTokenMiddleware(token))
 	admin.GET("/policies", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"items": policies.list(false)}) })
+	admin.POST("/detect", func(c *gin.Context) {
+		var req struct {
+			PolicyID string `json:"policy_id"`
+			Text     string `json:"text"`
+		}
+		if c.ShouldBindJSON(&req) != nil {
+			writeAPIError(c, 400, "INVALID_JSON", "请求格式无效", nil)
+			return
+		}
+		policy, ok := policies.get(req.PolicyID)
+		if !ok || !policy.Enabled {
+			writeAPIError(c, 404, "POLICY_NOT_FOUND", "策略不存在或未启用", nil)
+			return
+		}
+		if utf8.RuneCountInString(req.Text) > policy.MaxTextRunes {
+			writeAPIError(c, 413, "TEXT_TOO_LARGE", "文本超过策略限制", nil)
+			return
+		}
+		c.JSON(200, detectWithPolicy(c.Request.Context(), service.detector(), req.Text, policy))
+	})
+	admin.POST("/evaluations", func(c *gin.Context) {
+		var req evaluationRequest
+		if c.ShouldBindJSON(&req) != nil {
+			writeAPIError(c, 400, "INVALID_JSON", "评测格式无效", nil)
+			return
+		}
+		policy, ok := policies.get(req.PolicyID)
+		if !ok {
+			writeAPIError(c, 404, "POLICY_NOT_FOUND", "策略不存在", nil)
+			return
+		}
+		report, err := evaluatePolicy(c.Request.Context(), service.detector(), policy, req.Samples)
+		if err != nil {
+			writeAPIError(c, 422, "EVALUATION_INVALID", err.Error(), nil)
+			return
+		}
+		c.JSON(200, report)
+	})
 	admin.PUT("/policies/:id", func(c *gin.Context) {
 		var policy DetectionPolicy
 		if c.ShouldBindJSON(&policy) != nil {

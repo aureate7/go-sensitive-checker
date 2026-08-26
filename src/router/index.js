@@ -18,6 +18,11 @@ const routes = [
     name: 'BatchTasks',
     component: () => import('@/pages/Tasks.vue'),
   },
+  {
+    path: '/evaluations',
+    name: 'Evaluations',
+    component: () => import('@/pages/Evaluations.vue'),
+  },
 ]
 
 const router = createRouter({

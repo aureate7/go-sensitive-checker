@@ -298,6 +298,9 @@ type MaskSuggestion struct {
 }
 
 type DetectResponse struct {
+	PolicyID             string                    `json:"policy_id,omitempty"`
+	PolicyVersion        int                       `json:"policy_version,omitempty"`
+	PolicyRuleHits       []CompositeRuleHit        `json:"policy_rule_hits,omitempty"`
 	HasSensitive         bool                      `json:"has_sensitive"`
 	TotalCount           int                       `json:"total_count"`
 	TotalOccurrenceCount int                       `json:"total_occurrence_count"`

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -201,19 +202,59 @@ func TestPolicyStorePersistsAndValidatesPolicies(t *testing.T) {
 		t.Fatal("default policy missing")
 	}
 	policy := DetectionPolicy{ID: "comments", Name: "评论审核", Categories: []string{AbusiveHigh}, Options: DefaultDetectOptions(), MaxTextRunes: 5000, Enabled: true}
-	if _, err := store.upsert(policy); err != nil {
+	saved, err := store.upsert(policy)
+	if err != nil {
 		t.Fatalf("save policy: %v", err)
+	}
+	if saved.Version != 1 {
+		t.Fatalf("expected policy version 1, got %d", saved.Version)
+	}
+	saved.Name = "评论审核二版"
+	updated, err := store.upsert(saved)
+	if err != nil || updated.Version != 2 {
+		t.Fatalf("policy version did not increment: %+v %v", updated, err)
 	}
 	reloaded, err := newPolicyStore(dataPath)
 	if err != nil {
 		t.Fatalf("reload policy store: %v", err)
 	}
-	if got, ok := reloaded.get("comments"); !ok || got.Name != "评论审核" {
+	if got, ok := reloaded.get("comments"); !ok || got.Name != "评论审核二版" || got.Version != 2 {
 		t.Fatalf("policy not persisted: %+v", got)
 	}
 	policy.ID = "Invalid ID"
 	if _, err := store.upsert(policy); err == nil {
 		t.Fatal("expected invalid policy id error")
+	}
+}
+
+func TestPolicyWhitelistAndCompositeRules(t *testing.T) {
+	detector := NewDetector(setupTestWordRepo(t))
+	policy := DetectionPolicy{ID: "quality", Version: 3, Name: "质量策略", Categories: []string{AbusiveHigh}, Options: DefaultDetectOptions(), MaxTextRunes: 1000, Enabled: true, Whitelist: []string{"引用傻逼用于举报"}, Rules: []CompositeRule{{ID: "contact", Name: "引流组合", Terms: []string{"加我", "微信"}, MaxDistance: 10, RiskLevel: "high", Action: "review"}}}
+	whitelisted := detectWithPolicy(context.Background(), detector, "引用傻逼用于举报", policy)
+	if whitelisted.HasSensitive {
+		t.Fatalf("whitelist did not suppress hit: %+v", whitelisted)
+	}
+	combined := detectWithPolicy(context.Background(), detector, "请加我微信", policy)
+	if !combined.HasSensitive || combined.RiskLevel != "high" || len(combined.PolicyRuleHits) != 1 {
+		t.Fatalf("composite rule not applied: %+v", combined)
+	}
+	if combined.PolicyID != "quality" || combined.PolicyVersion != 3 {
+		t.Fatalf("policy trace missing: %+v", combined)
+	}
+}
+
+func TestPolicyEvaluationMetrics(t *testing.T) {
+	detector := NewDetector(setupTestWordRepo(t))
+	policy := DetectionPolicy{ID: "eval", Version: 1, Name: "评测", Categories: []string{AbusiveHigh}, Options: DefaultDetectOptions(), MaxTextRunes: 1000, Enabled: true}
+	report, err := evaluatePolicy(context.Background(), detector, policy, []evaluationSample{{Text: "你是傻逼", ExpectedSensitive: true}, {Text: "正常内容", ExpectedSensitive: false}, {Text: "傻逼", ExpectedSensitive: false}, {Text: "未命中的期待", ExpectedSensitive: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.TP != 1 || report.TN != 1 || report.FP != 1 || report.FN != 1 {
+		t.Fatalf("unexpected confusion matrix: %+v", report)
+	}
+	if report.Precision != 0.5 || report.Recall != 0.5 || report.F1 != 0.5 {
+		t.Fatalf("unexpected metrics: %+v", report)
 	}
 }
 
@@ -231,6 +272,9 @@ func TestBatchTaskCompletesAndPersistsResults(t *testing.T) {
 	task, err := manager.create(batchCreateRequest{PolicyID: "default", Lines: []string{"普通文本", "你是傻逼"}})
 	if err != nil {
 		t.Fatalf("create task: %v", err)
+	}
+	if task.PolicyVersion != 1 {
+		t.Fatalf("task did not capture policy version: %+v", task)
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
