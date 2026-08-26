@@ -384,6 +384,19 @@ curl -X POST http://localhost:8008/api/admin/wordlist/reload \
 
 管理令牌仅保存在浏览器 `sessionStorage`，关闭标签页后自动清除。生产环境必须通过 HTTPS 使用管理控制台，并设置高强度随机令牌。
 
+### 8) 检测策略与批量任务
+
+访问 `/tasks` 可按已启用策略创建批量检测任务。输入内容每行作为一条独立文本，任务在后台并行处理，支持进度刷新、取消以及 CSV/JSONL 导出。
+
+- `GET /api/policies`：获取启用的检测策略。
+- `GET/PUT/DELETE /api/platform/policies/*`：管理策略。
+- `POST /api/platform/tasks`：创建批量任务。
+- `GET /api/platform/tasks`：查看任务列表和进度。
+- `POST /api/platform/tasks/:id/cancel`：请求取消。
+- `GET /api/platform/tasks/:id/results?format=csv`：导出结果。
+
+策略、任务元数据和结果保存在 `SENSITIVE_DATA_PATH`。服务异常重启后，未完成任务会标记为 `interrupted`，已完成结果仍可下载。
+
 ### API 错误格式
 
 参数、容量和服务状态错误使用稳定错误码，并在响应头及响应体中返回请求 ID：
@@ -462,10 +475,24 @@ s b = sb
 | `SENSITIVE_MAX_MAPPING_RUNES` | `128` | 单个映射源或目标的最大字符数 |
 | `SENSITIVE_ADMIN_TOKEN` | 空 | 词库管理接口令牌；为空时不注册管理 API |
 | `SENSITIVE_DATA_PATH` | `data` | 词库版本快照和审计日志目录 |
+| `SENSITIVE_MAX_BATCH_LINES` | `10000` | 单个批量任务最大文本行数 |
+| `SENSITIVE_BATCH_WORKERS` | `4` | 单个任务并行检测工作数，最大 32 |
+| `SENSITIVE_MAX_CONCURRENT_TASKS` | `2` | 同时运行的批量任务数，其他任务保持排队 |
 
 ---
 
 ## 构建与部署
+
+### Docker Compose
+
+确保 `go-sensitive-checker/temp` 已放置词库，然后执行：
+
+```bash
+export SENSITIVE_ADMIN_TOKEN="请替换为高强度随机令牌"
+docker compose up --build -d
+```
+
+访问 `http://localhost:8080`。后端和前端均以非 root/只读容器运行，策略、任务、审计和版本数据保存在命名卷 `sensitive-data`。
 
 ### 前端构建
 

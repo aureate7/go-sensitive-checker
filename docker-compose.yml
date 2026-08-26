@@ -1,0 +1,35 @@
+services:
+  backend:
+    build: ./go-sensitive-checker
+    restart: unless-stopped
+    environment:
+      SENSITIVE_SERVER_ADDRESS: ":8008"
+      SENSITIVE_WORDLIST_PATH: /app/temp
+      SENSITIVE_DATA_PATH: /app/data
+      SENSITIVE_ADMIN_TOKEN: ${SENSITIVE_ADMIN_TOKEN:?set SENSITIVE_ADMIN_TOKEN}
+      SENSITIVE_ALLOWED_ORIGINS: ${SENSITIVE_ALLOWED_ORIGINS:-http://localhost:8080}
+    volumes:
+      - ./go-sensitive-checker/temp:/app/temp
+      - sensitive-data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8008/health/ready"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    read_only: true
+    tmpfs: [/tmp]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports: ["8080:80"]
+    read_only: true
+    tmpfs: [/var/cache/nginx, /var/run]
+
+volumes:
+  sensitive-data:

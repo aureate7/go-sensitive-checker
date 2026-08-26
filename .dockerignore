@@ -1,0 +1,9 @@
+.git
+.github
+.vscode
+node_modules
+dist
+data
+go-sensitive-checker/data
+go-sensitive-checker/temp
+*.log

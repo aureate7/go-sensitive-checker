@@ -38,3 +38,11 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - run: go test -race ./...
       - run: go vet ./...
+
+  containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t sensitive-checker-backend ./go-sensitive-checker
+      - run: docker build -f Dockerfile.frontend -t sensitive-checker-frontend .
+      - run: SENSITIVE_ADMIN_TOKEN=ci-test-token docker compose config --quiet

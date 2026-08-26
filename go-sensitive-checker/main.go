@@ -44,6 +44,9 @@ type serverConfig struct {
 	DataPath        string
 	MaxMappings     int
 	MaxMappingRunes int
+	MaxBatchLines   int
+	BatchWorkers    int
+	MaxBatchTasks   int
 }
 
 type detectorService struct {
@@ -93,6 +96,9 @@ func loadServerConfig() serverConfig {
 		DataPath:        envStr("SENSITIVE_DATA_PATH", "data"),
 		MaxMappings:     envInt("SENSITIVE_MAX_CUSTOM_MAPPINGS", 500),
 		MaxMappingRunes: envInt("SENSITIVE_MAX_MAPPING_RUNES", 128),
+		MaxBatchLines:   envInt("SENSITIVE_MAX_BATCH_LINES", 10000),
+		BatchWorkers:    envInt("SENSITIVE_BATCH_WORKERS", 4),
+		MaxBatchTasks:   envInt("SENSITIVE_MAX_CONCURRENT_TASKS", 2),
 	}
 }
 
@@ -108,6 +114,9 @@ func splitCSV(raw string) []string {
 }
 
 func normalizedServerConfig(cfg serverConfig) serverConfig {
+	if strings.TrimSpace(cfg.DataPath) == "" {
+		cfg.DataPath = "data"
+	}
 	if cfg.MaxBodyBytes <= 0 {
 		cfg.MaxBodyBytes = 1 << 20
 	}
@@ -122,6 +131,15 @@ func normalizedServerConfig(cfg serverConfig) serverConfig {
 	}
 	if cfg.MaxMappingRunes <= 0 {
 		cfg.MaxMappingRunes = 128
+	}
+	if cfg.MaxBatchLines <= 0 {
+		cfg.MaxBatchLines = 10000
+	}
+	if cfg.BatchWorkers <= 0 {
+		cfg.BatchWorkers = 4
+	}
+	if cfg.MaxBatchTasks <= 0 {
+		cfg.MaxBatchTasks = 2
 	}
 	return cfg
 }
@@ -226,6 +244,9 @@ func newRouter(service *detectorService, cfg serverConfig) *gin.Engine {
 	}
 	if cfg.AdminToken != "" {
 		registerAdminRoutes(r, newAdminManager(service, cfg.DataPath), cfg.AdminToken)
+	}
+	if err := registerPlatformRoutes(r, service, cfg.AdminToken, cfg.DataPath, cfg.MaxBatchLines, cfg.BatchWorkers, cfg.MaxBatchTasks); err != nil {
+		log.Printf("platform features disabled: %v", err)
 	}
 	r.GET("/health/live", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "alive"}) })
 	r.GET("/health/ready", func(c *gin.Context) {

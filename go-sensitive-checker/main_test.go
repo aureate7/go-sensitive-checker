@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -27,7 +30,7 @@ func TestReadinessFailsForEmptyWordList(t *testing.T) {
 	detector := NewDetector(t.TempDir())
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
-	newRouter(newDetectorService(detector), serverConfig{}).ServeHTTP(recorder, request)
+	newRouter(newDetectorService(detector), serverConfig{DataPath: t.TempDir()}).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503 for empty word list, got %d: %s", recorder.Code, recorder.Body.String())
 	}
@@ -43,7 +46,7 @@ func TestDetectRejectsTextOverLimit(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/detect", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
-	newRouter(newDetectorService(detector), serverConfig{MaxTextRunes: 2, MaxBodyBytes: 1024, MaxConcurrent: 1}).ServeHTTP(recorder, request)
+	newRouter(newDetectorService(detector), serverConfig{MaxTextRunes: 2, MaxBodyBytes: 1024, MaxConcurrent: 1, DataPath: t.TempDir()}).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d: %s", recorder.Code, recorder.Body.String())
 	}
@@ -53,7 +56,7 @@ func TestSecurityHeaders(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/health/live", nil)
-	newRouter(newDetectorService(NewDetector(t.TempDir())), serverConfig{}).ServeHTTP(recorder, request)
+	newRouter(newDetectorService(NewDetector(t.TempDir())), serverConfig{DataPath: t.TempDir()}).ServeHTTP(recorder, request)
 	if got := recorder.Header().Get("X-Content-Type-Options"); got != "nosniff" {
 		t.Fatalf("unexpected security header: %q", got)
 	}
@@ -61,7 +64,7 @@ func TestSecurityHeaders(t *testing.T) {
 
 func TestDetectRejectsUnknownCategoryWithStableError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	router := newRouter(newDetectorService(NewDetector(setupTestWordRepo(t))), serverConfig{})
+	router := newRouter(newDetectorService(NewDetector(setupTestWordRepo(t))), serverConfig{DataPath: t.TempDir()})
 	recorder := performJSONRequest(router, http.MethodPost, "/api/detect", detectReq{Text: "测试", Categories: []string{"unknown"}}, nil)
 	if recorder.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d: %s", recorder.Code, recorder.Body.String())
@@ -86,7 +89,7 @@ func TestWordListReloadKeepsCurrentDetectorOnFailure(t *testing.T) {
 	service := newDetectorService(NewDetector(base))
 	before := service.detector()
 	before.basePath = t.TempDir()
-	router := newRouter(service, serverConfig{ReloadToken: "test-secret"})
+	router := newRouter(service, serverConfig{ReloadToken: "test-secret", DataPath: t.TempDir()})
 	recorder := performJSONRequest(router, http.MethodPost, "/api/admin/wordlist/reload", nil, map[string]string{"Authorization": "Bearer test-secret"})
 	if recorder.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected failed reload status, got %d: %s", recorder.Code, recorder.Body.String())
@@ -98,7 +101,7 @@ func TestWordListReloadKeepsCurrentDetectorOnFailure(t *testing.T) {
 
 func TestStatusReportsCapabilitiesAndLimits(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	router := newRouter(newDetectorService(NewDetector(setupTestWordRepo(t))), serverConfig{MaxTextRunes: 123, ReloadToken: "enabled"})
+	router := newRouter(newDetectorService(NewDetector(setupTestWordRepo(t))), serverConfig{MaxTextRunes: 123, ReloadToken: "enabled", DataPath: t.TempDir()})
 	recorder := performJSONRequest(router, http.MethodGet, "/api/status", nil, nil)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", recorder.Code)
@@ -185,5 +188,75 @@ func TestParseImportRejectsUnknownCategory(t *testing.T) {
 	_, err := parseImport("unknown", "test", nil)
 	if err == nil {
 		t.Fatal("expected unknown category error")
+	}
+}
+
+func TestPolicyStorePersistsAndValidatesPolicies(t *testing.T) {
+	dataPath := t.TempDir()
+	store, err := newPolicyStore(dataPath)
+	if err != nil {
+		t.Fatalf("create policy store: %v", err)
+	}
+	if _, ok := store.get("default"); !ok {
+		t.Fatal("default policy missing")
+	}
+	policy := DetectionPolicy{ID: "comments", Name: "评论审核", Categories: []string{AbusiveHigh}, Options: DefaultDetectOptions(), MaxTextRunes: 5000, Enabled: true}
+	if _, err := store.upsert(policy); err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+	reloaded, err := newPolicyStore(dataPath)
+	if err != nil {
+		t.Fatalf("reload policy store: %v", err)
+	}
+	if got, ok := reloaded.get("comments"); !ok || got.Name != "评论审核" {
+		t.Fatalf("policy not persisted: %+v", got)
+	}
+	policy.ID = "Invalid ID"
+	if _, err := store.upsert(policy); err == nil {
+		t.Fatal("expected invalid policy id error")
+	}
+}
+
+func TestBatchTaskCompletesAndPersistsResults(t *testing.T) {
+	dataPath := t.TempDir()
+	service := newDetectorService(NewDetector(setupTestWordRepo(t)))
+	policies, err := newPolicyStore(dataPath)
+	if err != nil {
+		t.Fatalf("create policies: %v", err)
+	}
+	manager, err := newTaskManager(service, policies, dataPath, 10, 2, 1)
+	if err != nil {
+		t.Fatalf("create task manager: %v", err)
+	}
+	task, err := manager.create(batchCreateRequest{PolicyID: "default", Lines: []string{"普通文本", "你是傻逼"}})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		current, _ := manager.get(task.ID)
+		if current.Status == "completed" {
+			if current.Processed != 2 || current.Sensitive != 1 {
+				t.Fatalf("unexpected task counters: %+v", current)
+			}
+			raw, readErr := os.ReadFile(filepath.Join(dataPath, "tasks", task.ID, "results.jsonl"))
+			if readErr != nil || !bytes.Contains(raw, []byte(`"has_sensitive":true`)) {
+				t.Fatalf("unexpected results: %v %s", readErr, raw)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("task did not complete: %+v", task)
+}
+
+func TestBatchTaskRejectsConfiguredLineLimit(t *testing.T) {
+	dataPath := t.TempDir()
+	service := newDetectorService(NewDetector(setupTestWordRepo(t)))
+	policies, _ := newPolicyStore(dataPath)
+	manager, _ := newTaskManager(service, policies, dataPath, 1, 1, 1)
+	_, err := manager.create(batchCreateRequest{PolicyID: "default", Lines: []string{"one", "two"}})
+	if err == nil {
+		t.Fatal("expected line limit error")
 	}
 }

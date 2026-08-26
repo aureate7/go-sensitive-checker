@@ -19,6 +19,7 @@
         <div class="nav-right">
           <button class="nav-btn" @click="goHome">首页</button>
           <button class="nav-btn" @click="router.push('/admin')">词库管理</button>
+          <button class="nav-btn" @click="router.push('/tasks')">批量任务</button>
 
           <button class="nav-btn ghost" @click="toggleDark">
             <el-icon>

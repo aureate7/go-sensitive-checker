@@ -21,6 +21,13 @@ export const applyAdminImport = async (token, payload) => (await api.post('/admi
 export const fetchWordlistVersions = async (token) => (await api.get('/admin/wordlists/versions', { headers: adminHeaders(token) })).data
 export const rollbackWordlist = async (token, version) => (await api.post(`/admin/wordlists/rollback/${encodeURIComponent(version)}`, {}, { headers: adminHeaders(token) })).data
 export const fetchAuditEntries = async (token) => (await api.get('/admin/audit', { headers: adminHeaders(token) })).data
+export const fetchPolicies = async () => (await api.get('/policies')).data
+export const fetchPlatformPolicies = async (token) => (await api.get('/platform/policies', { headers: adminHeaders(token) })).data
+export const savePlatformPolicy = async (token, policy) => (await api.put(`/platform/policies/${encodeURIComponent(policy.id)}`, policy, { headers: adminHeaders(token) })).data
+export const createBatchTask = async (token, payload) => (await api.post('/platform/tasks', payload, { headers: adminHeaders(token) })).data
+export const fetchBatchTasks = async (token) => (await api.get('/platform/tasks', { headers: adminHeaders(token) })).data
+export const cancelBatchTask = async (token, id) => (await api.post(`/platform/tasks/${encodeURIComponent(id)}/cancel`, {}, { headers: adminHeaders(token) })).data
+export const downloadBatchResults = async (token, id, format = 'csv') => (await api.get(`/platform/tasks/${encodeURIComponent(id)}/results`, { params: { format }, headers: adminHeaders(token), responseType: 'blob' })).data
 
 export const describeAPIError = (error) => {
   if (axios.isCancel(error)) return { message: '检测已取消', code: 'REQUEST_CANCELLED' }

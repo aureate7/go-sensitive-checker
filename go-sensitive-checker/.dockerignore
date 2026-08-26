@@ -1,0 +1,5 @@
+.git
+data
+temp
+*.log
+sensitive-checker

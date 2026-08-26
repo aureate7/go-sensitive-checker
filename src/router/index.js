@@ -13,6 +13,11 @@ const routes = [
     name: 'Admin',
     component: () => import('@/pages/Admin.vue'),
   },
+  {
+    path: '/tasks',
+    name: 'BatchTasks',
+    component: () => import('@/pages/Tasks.vue'),
+  },
 ]
 
 const router = createRouter({
