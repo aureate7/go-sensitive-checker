@@ -258,6 +258,41 @@ func TestPolicyEvaluationMetrics(t *testing.T) {
 	}
 }
 
+func TestRiskScoreAndRecommendedAction(t *testing.T) {
+	detector := NewDetector(setupTestWordRepo(t))
+	policy := DetectionPolicy{ID: "score", Version: 1, Name: "评分", Categories: []string{AbusiveHigh}, Options: DefaultDetectOptions(), MaxTextRunes: 1000, Enabled: true, ReviewThreshold: 20, BlockThreshold: 50}
+	response := detectWithPolicy(context.Background(), detector, "傻逼 傻逼", policy)
+	if response.RiskScore < 50 || response.RecommendedAction != "block" || response.ScoreBreakdown["high_occurrences"] == 0 {
+		t.Fatalf("unexpected scoring: %+v", response)
+	}
+}
+
+func TestReviewClaimResolveAndFeedbackCandidate(t *testing.T) {
+	store, err := newReviewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.create("测试文本", DetectResponse{PolicyID: "default", PolicyVersion: 1, RiskScore: 30, RecommendedAction: "review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.claim(task.ID, "alice")
+	if err != nil || claimed.Status != "claimed" {
+		t.Fatalf("claim: %+v %v", claimed, err)
+	}
+	if _, err := store.claim(task.ID, "bob"); err == nil {
+		t.Fatal("second reviewer claimed same task")
+	}
+	resolved, err := store.resolve(task.ID, "alice", "false_positive", "上下文豁免", "whitelist", "测试文本", "")
+	if err != nil || resolved.Status != "resolved" {
+		t.Fatalf("resolve: %+v %v", resolved, err)
+	}
+	candidates := store.listCandidates()
+	if len(candidates) != 1 || candidates[0].Type != "whitelist" {
+		t.Fatalf("candidate not generated: %+v", candidates)
+	}
+}
+
 func TestBatchTaskCompletesAndPersistsResults(t *testing.T) {
 	dataPath := t.TempDir()
 	service := newDetectorService(NewDetector(setupTestWordRepo(t)))

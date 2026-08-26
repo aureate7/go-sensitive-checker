@@ -32,6 +32,12 @@ export const deleteBatchTask = async (token, id) => api.delete(`/platform/tasks/
 export const fetchTaskStorage = async (token) => (await api.get('/platform/storage', { headers: adminHeaders(token) })).data
 export const cleanupBatchTasks = async (token) => (await api.post('/platform/tasks/cleanup', {}, { headers: adminHeaders(token) })).data
 export const runPolicyEvaluation = async (token, payload) => (await api.post('/platform/evaluations', payload, { headers: adminHeaders(token) })).data
+export const createReviewTask = async (token,payload)=>(await api.post('/platform/reviews',payload,{headers:adminHeaders(token)})).data
+export const fetchReviewTasks = async (token)=>(await api.get('/platform/reviews',{headers:adminHeaders(token)})).data
+export const claimReviewTask = async (token,id,reviewer)=>(await api.post(`/platform/reviews/${id}/claim`,{reviewer},{headers:adminHeaders(token)})).data
+export const releaseReviewTask = async (token,id,reviewer)=>(await api.post(`/platform/reviews/${id}/release`,{reviewer},{headers:adminHeaders(token)})).data
+export const resolveReviewTask = async (token,id,payload)=>(await api.post(`/platform/reviews/${id}/resolve`,payload,{headers:adminHeaders(token)})).data
+export const fetchFeedbackCandidates = async (token)=>(await api.get('/platform/feedback-candidates',{headers:adminHeaders(token)})).data
 export const downloadBatchResults = async (token, id, format = 'csv') => (await api.get(`/platform/tasks/${encodeURIComponent(id)}/results`, { params: { format }, headers: adminHeaders(token), responseType: 'blob' })).data
 
 export const describeAPIError = (error) => {

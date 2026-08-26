@@ -301,6 +301,9 @@ type DetectResponse struct {
 	PolicyID             string                    `json:"policy_id,omitempty"`
 	PolicyVersion        int                       `json:"policy_version,omitempty"`
 	PolicyRuleHits       []CompositeRuleHit        `json:"policy_rule_hits,omitempty"`
+	RiskScore            int                       `json:"risk_score"`
+	RecommendedAction    string                    `json:"recommended_action"`
+	ScoreBreakdown       map[string]int            `json:"score_breakdown,omitempty"`
 	HasSensitive         bool                      `json:"has_sensitive"`
 	TotalCount           int                       `json:"total_count"`
 	TotalOccurrenceCount int                       `json:"total_occurrence_count"`

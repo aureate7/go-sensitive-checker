@@ -420,6 +420,12 @@ curl -X POST http://localhost:8008/api/admin/wordlist/reload \
 - `POST /api/platform/detect`：使用指定策略检测单条文本。
 - `POST /api/platform/evaluations`：运行最多 5000 条质量评测样本。
 
+### 10) 可解释评分与人工复核
+
+按策略检测会返回 `risk_score`、`recommended_action` 和 `score_breakdown`。策略可配置人工复核与阻断阈值，推荐动作包括 `allow/mask/review/block`。
+
+访问 `/reviews` 可提交、领取、释放和结案复核任务。同一任务只能由一个审核员领取；误报可生成白名单候选，漏报可生成词库候选，候选不会直接影响线上检测。
+
 ### API 错误格式
 
 参数、容量和服务状态错误使用稳定错误码，并在响应头及响应体中返回请求 ID：

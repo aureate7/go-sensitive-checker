@@ -23,17 +23,19 @@ import (
 )
 
 type DetectionPolicy struct {
-	ID           string          `json:"id"`
-	Version      int             `json:"version"`
-	Name         string          `json:"name"`
-	Categories   []string        `json:"categories"`
-	Options      DetectOptions   `json:"options"`
-	MaxTextRunes int             `json:"max_text_runes"`
-	Enabled      bool            `json:"enabled"`
-	Whitelist    []string        `json:"whitelist,omitempty"`
-	Rules        []CompositeRule `json:"rules,omitempty"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	ID              string          `json:"id"`
+	Version         int             `json:"version"`
+	Name            string          `json:"name"`
+	Categories      []string        `json:"categories"`
+	Options         DetectOptions   `json:"options"`
+	MaxTextRunes    int             `json:"max_text_runes"`
+	Enabled         bool            `json:"enabled"`
+	Whitelist       []string        `json:"whitelist,omitempty"`
+	Rules           []CompositeRule `json:"rules,omitempty"`
+	ReviewThreshold int             `json:"review_threshold"`
+	BlockThreshold  int             `json:"block_threshold"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
 type CompositeRule struct {
@@ -66,7 +68,7 @@ func newPolicyStore(dataPath string) (*policyStore, error) {
 	}
 	if len(store.policies) == 0 {
 		now := time.Now().UTC()
-		store.policies["default"] = DetectionPolicy{ID: "default", Version: 1, Name: "默认全类别策略", Categories: sortedCategories(), Options: DefaultDetectOptions(), MaxTextRunes: 20000, Enabled: true, CreatedAt: now, UpdatedAt: now}
+		store.policies["default"] = DetectionPolicy{ID: "default", Version: 1, Name: "默认全类别策略", Categories: sortedCategories(), Options: DefaultDetectOptions(), MaxTextRunes: 20000, Enabled: true, ReviewThreshold: 25, BlockThreshold: 70, CreatedAt: now, UpdatedAt: now}
 		if err := store.saveLocked(); err != nil {
 			return nil, err
 		}
@@ -99,6 +101,12 @@ func (s *policyStore) load() error {
 		if policy.Version < 1 {
 			policy.Version = 1
 		}
+		if policy.ReviewThreshold <= 0 {
+			policy.ReviewThreshold = 25
+		}
+		if policy.BlockThreshold <= 0 {
+			policy.BlockThreshold = 70
+		}
 		s.policies[policy.ID] = policy
 	}
 	return nil
@@ -125,6 +133,12 @@ func (s *policyStore) get(id string) (DetectionPolicy, bool) {
 }
 
 func (s *policyStore) upsert(policy DetectionPolicy) (DetectionPolicy, error) {
+	if policy.ReviewThreshold <= 0 {
+		policy.ReviewThreshold = 25
+	}
+	if policy.BlockThreshold <= 0 {
+		policy.BlockThreshold = 70
+	}
 	if err := validatePolicy(policy); err != nil {
 		return DetectionPolicy{}, err
 	}
@@ -188,6 +202,15 @@ func validatePolicy(policy DetectionPolicy) error {
 	if policy.MaxTextRunes < 1 || policy.MaxTextRunes > 100000 {
 		return fmt.Errorf("invalid max_text_runes")
 	}
+	if policy.ReviewThreshold <= 0 {
+		policy.ReviewThreshold = 25
+	}
+	if policy.BlockThreshold <= 0 {
+		policy.BlockThreshold = 70
+	}
+	if policy.ReviewThreshold >= policy.BlockThreshold || policy.BlockThreshold > 100 {
+		return fmt.Errorf("invalid action thresholds")
+	}
 	if len(policy.Categories) == 0 {
 		return fmt.Errorf("categories required")
 	}
@@ -239,7 +262,41 @@ func detectWithPolicy(ctx context.Context, detector *Detector, text string, poli
 			response.RiskLevel = hit.RiskLevel
 		}
 	}
+	applyRiskScore(&response, policy)
 	return response
+}
+
+func applyRiskScore(response *DetectResponse, policy DetectionPolicy) {
+	breakdown := map[string]int{
+		"high_occurrences":   response.RiskOccurrence["high"] * 30,
+		"medium_occurrences": response.RiskOccurrence["medium"] * 20,
+		"low_occurrences":    response.RiskOccurrence["low"] * 10,
+	}
+	for _, hit := range response.PolicyRuleHits {
+		breakdown["composite_rules"] += map[string]int{"high": 35, "medium": 25, "low": 15}[hit.RiskLevel]
+	}
+	score := 0
+	for _, value := range breakdown {
+		score += value
+	}
+	if score > 100 {
+		score = 100
+	}
+	reviewThreshold, blockThreshold := policy.ReviewThreshold, policy.BlockThreshold
+	if reviewThreshold <= 0 {
+		reviewThreshold = 25
+	}
+	if blockThreshold <= 0 {
+		blockThreshold = 70
+	}
+	response.RiskScore, response.ScoreBreakdown, response.RecommendedAction = score, breakdown, "allow"
+	if score >= blockThreshold {
+		response.RecommendedAction = "block"
+	} else if score >= reviewThreshold {
+		response.RecommendedAction = "review"
+	} else if score > 0 {
+		response.RecommendedAction = "mask"
+	}
 }
 
 func maskWhitelist(text string, whitelist []string) string {
@@ -836,6 +893,9 @@ func registerPlatformRoutes(r *gin.Engine, service *detectorService, token, data
 	}
 	admin := r.Group("/api/platform")
 	admin.Use(adminTokenMiddleware(token))
+	if err := registerReviewRoutes(admin, service, policies, dataPath); err != nil {
+		return err
+	}
 	admin.GET("/policies", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"items": policies.list(false)}) })
 	admin.POST("/detect", func(c *gin.Context) {
 		var req struct {

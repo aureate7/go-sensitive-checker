@@ -23,6 +23,7 @@ const routes = [
     name: 'Evaluations',
     component: () => import('@/pages/Evaluations.vue'),
   },
+  { path:'/reviews', name:'Reviews', component:()=>import('@/pages/Reviews.vue') },
 ]
 
 const router = createRouter({
