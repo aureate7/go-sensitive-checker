@@ -47,6 +47,8 @@ type serverConfig struct {
 	MaxBatchLines   int
 	BatchWorkers    int
 	MaxBatchTasks   int
+	TaskRetention   time.Duration
+	TaskMaxStorage  int64
 }
 
 type detectorService struct {
@@ -99,6 +101,8 @@ func loadServerConfig() serverConfig {
 		MaxBatchLines:   envInt("SENSITIVE_MAX_BATCH_LINES", 10000),
 		BatchWorkers:    envInt("SENSITIVE_BATCH_WORKERS", 4),
 		MaxBatchTasks:   envInt("SENSITIVE_MAX_CONCURRENT_TASKS", 2),
+		TaskRetention:   time.Duration(envInt("SENSITIVE_TASK_RETENTION_HOURS", 168)) * time.Hour,
+		TaskMaxStorage:  int64(envInt("SENSITIVE_TASK_MAX_STORAGE_BYTES", 10<<30)),
 	}
 }
 
@@ -140,6 +144,12 @@ func normalizedServerConfig(cfg serverConfig) serverConfig {
 	}
 	if cfg.MaxBatchTasks <= 0 {
 		cfg.MaxBatchTasks = 2
+	}
+	if cfg.TaskRetention <= 0 {
+		cfg.TaskRetention = 7 * 24 * time.Hour
+	}
+	if cfg.TaskMaxStorage <= 0 {
+		cfg.TaskMaxStorage = 10 << 30
 	}
 	return cfg
 }
@@ -245,7 +255,7 @@ func newRouter(service *detectorService, cfg serverConfig) *gin.Engine {
 	if cfg.AdminToken != "" {
 		registerAdminRoutes(r, newAdminManager(service, cfg.DataPath), cfg.AdminToken)
 	}
-	if err := registerPlatformRoutes(r, service, cfg.AdminToken, cfg.DataPath, cfg.MaxBatchLines, cfg.BatchWorkers, cfg.MaxBatchTasks); err != nil {
+	if err := registerPlatformRoutes(r, service, cfg.AdminToken, cfg.DataPath, cfg.MaxBatchLines, cfg.BatchWorkers, cfg.MaxBatchTasks, cfg.TaskRetention, cfg.TaskMaxStorage); err != nil {
 		log.Printf("platform features disabled: %v", err)
 	}
 	r.GET("/health/live", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "alive"}) })

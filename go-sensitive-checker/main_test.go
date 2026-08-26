@@ -224,7 +224,7 @@ func TestBatchTaskCompletesAndPersistsResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create policies: %v", err)
 	}
-	manager, err := newTaskManager(service, policies, dataPath, 10, 2, 1)
+	manager, err := newTaskManager(service, policies, dataPath, 10, 2, 1, time.Hour, 1<<20)
 	if err != nil {
 		t.Fatalf("create task manager: %v", err)
 	}
@@ -243,6 +243,26 @@ func TestBatchTaskCompletesAndPersistsResults(t *testing.T) {
 			if readErr != nil || !bytes.Contains(raw, []byte(`"has_sensitive":true`)) {
 				t.Fatalf("unexpected results: %v %s", readErr, raw)
 			}
+			if bytes.Index(raw, []byte(`"line":1`)) > bytes.Index(raw, []byte(`"line":2`)) {
+				t.Fatal("parallel results are not ordered by input line")
+			}
+			retried, retryErr := manager.retry(task.ID)
+			if retryErr != nil || retried.ParentTaskID != task.ID {
+				t.Fatalf("retry failed: %+v %v", retried, retryErr)
+			}
+			for time.Now().Before(deadline.Add(3 * time.Second)) {
+				retryState, _ := manager.get(retried.ID)
+				if retryState.Status == "completed" {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if err := manager.delete(task.ID); err != nil {
+				t.Fatalf("delete completed task: %v", err)
+			}
+			if _, ok := manager.get(task.ID); ok {
+				t.Fatal("deleted task remains listed")
+			}
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -250,11 +270,30 @@ func TestBatchTaskCompletesAndPersistsResults(t *testing.T) {
 	t.Fatalf("task did not complete: %+v", task)
 }
 
+func TestTaskCleanupRemovesExpiredTerminalTasks(t *testing.T) {
+	dataPath := t.TempDir()
+	service := newDetectorService(NewDetector(setupTestWordRepo(t)))
+	policies, _ := newPolicyStore(dataPath)
+	manager, _ := newTaskManager(service, policies, dataPath, 10, 1, 1, time.Millisecond, 1<<20)
+	task, err := manager.create(batchCreateRequest{PolicyID: "default", Lines: []string{"test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	removed, err := manager.cleanup(time.Now().UTC())
+	if err != nil || removed != 1 {
+		t.Fatalf("cleanup removed=%d err=%v", removed, err)
+	}
+	if _, ok := manager.get(task.ID); ok {
+		t.Fatal("expired task remains")
+	}
+}
+
 func TestBatchTaskRejectsConfiguredLineLimit(t *testing.T) {
 	dataPath := t.TempDir()
 	service := newDetectorService(NewDetector(setupTestWordRepo(t)))
 	policies, _ := newPolicyStore(dataPath)
-	manager, _ := newTaskManager(service, policies, dataPath, 1, 1, 1)
+	manager, _ := newTaskManager(service, policies, dataPath, 1, 1, 1, time.Hour, 1<<20)
 	_, err := manager.create(batchCreateRequest{PolicyID: "default", Lines: []string{"one", "two"}})
 	if err == nil {
 		t.Fatal("expected line limit error")

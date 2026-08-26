@@ -393,6 +393,10 @@ curl -X POST http://localhost:8008/api/admin/wordlist/reload \
 - `POST /api/platform/tasks`：创建批量任务。
 - `GET /api/platform/tasks`：查看任务列表和进度。
 - `POST /api/platform/tasks/:id/cancel`：请求取消。
+- `POST /api/platform/tasks/:id/retry`：使用原始输入和策略创建重试任务。
+- `DELETE /api/platform/tasks/:id`：删除终态任务及其全部文件。
+- `GET /api/platform/storage`：查看任务存储使用量和保留策略。
+- `POST /api/platform/tasks/cleanup`：立即清理过期终态任务。
 - `GET /api/platform/tasks/:id/results?format=csv`：导出结果。
 
 策略、任务元数据和结果保存在 `SENSITIVE_DATA_PATH`。服务异常重启后，未完成任务会标记为 `interrupted`，已完成结果仍可下载。
@@ -478,6 +482,8 @@ s b = sb
 | `SENSITIVE_MAX_BATCH_LINES` | `10000` | 单个批量任务最大文本行数 |
 | `SENSITIVE_BATCH_WORKERS` | `4` | 单个任务并行检测工作数，最大 32 |
 | `SENSITIVE_MAX_CONCURRENT_TASKS` | `2` | 同时运行的批量任务数，其他任务保持排队 |
+| `SENSITIVE_TASK_RETENTION_HOURS` | `168` | 终态任务及结果默认保留小时数 |
+| `SENSITIVE_TASK_MAX_STORAGE_BYTES` | `10737418240` | 任务数据目录容量上限，超限时拒绝新任务 |
 
 ---
 

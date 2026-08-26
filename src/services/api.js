@@ -27,6 +27,10 @@ export const savePlatformPolicy = async (token, policy) => (await api.put(`/plat
 export const createBatchTask = async (token, payload) => (await api.post('/platform/tasks', payload, { headers: adminHeaders(token) })).data
 export const fetchBatchTasks = async (token) => (await api.get('/platform/tasks', { headers: adminHeaders(token) })).data
 export const cancelBatchTask = async (token, id) => (await api.post(`/platform/tasks/${encodeURIComponent(id)}/cancel`, {}, { headers: adminHeaders(token) })).data
+export const retryBatchTask = async (token, id) => (await api.post(`/platform/tasks/${encodeURIComponent(id)}/retry`, {}, { headers: adminHeaders(token) })).data
+export const deleteBatchTask = async (token, id) => api.delete(`/platform/tasks/${encodeURIComponent(id)}`, { headers: adminHeaders(token) })
+export const fetchTaskStorage = async (token) => (await api.get('/platform/storage', { headers: adminHeaders(token) })).data
+export const cleanupBatchTasks = async (token) => (await api.post('/platform/tasks/cleanup', {}, { headers: adminHeaders(token) })).data
 export const downloadBatchResults = async (token, id, format = 'csv') => (await api.get(`/platform/tasks/${encodeURIComponent(id)}/results`, { params: { format }, headers: adminHeaders(token), responseType: 'blob' })).data
 
 export const describeAPIError = (error) => {

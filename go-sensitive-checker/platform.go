@@ -180,17 +180,20 @@ func validatePolicy(policy DetectionPolicy) error {
 }
 
 type BatchTask struct {
-	ID          string     `json:"id"`
-	PolicyID    string     `json:"policy_id"`
-	Status      string     `json:"status"`
-	Total       int        `json:"total"`
-	Processed   int        `json:"processed"`
-	Sensitive   int        `json:"sensitive"`
-	Failed      int        `json:"failed"`
-	CreatedAt   time.Time  `json:"created_at"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	Error       string     `json:"error,omitempty"`
+	ID           string     `json:"id"`
+	PolicyID     string     `json:"policy_id"`
+	Status       string     `json:"status"`
+	Total        int        `json:"total"`
+	Processed    int        `json:"processed"`
+	Sensitive    int        `json:"sensitive"`
+	Failed       int        `json:"failed"`
+	CreatedAt    time.Time  `json:"created_at"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	Error        string     `json:"error,omitempty"`
+	ParentTaskID string     `json:"parent_task_id,omitempty"`
+	ExpiresAt    time.Time  `json:"expires_at"`
+	ResultBytes  int64      `json:"result_bytes"`
 }
 
 type batchCreateRequest struct {
@@ -209,17 +212,19 @@ type taskRuntime struct {
 }
 
 type taskManager struct {
-	service   *detectorService
-	policies  *policyStore
-	path      string
-	maxLines  int
-	workers   int
-	taskSlots chan struct{}
-	mu        sync.RWMutex
-	tasks     map[string]*taskRuntime
+	service         *detectorService
+	policies        *policyStore
+	path            string
+	maxLines        int
+	workers         int
+	taskSlots       chan struct{}
+	retention       time.Duration
+	maxStorageBytes int64
+	mu              sync.RWMutex
+	tasks           map[string]*taskRuntime
 }
 
-func newTaskManager(service *detectorService, policies *policyStore, dataPath string, maxLines, workers, maxConcurrentTasks int) (*taskManager, error) {
+func newTaskManager(service *detectorService, policies *policyStore, dataPath string, maxLines, workers, maxConcurrentTasks int, retention time.Duration, maxStorageBytes int64) (*taskManager, error) {
 	if maxLines <= 0 {
 		maxLines = 10000
 	}
@@ -232,7 +237,13 @@ func newTaskManager(service *detectorService, policies *policyStore, dataPath st
 	if maxConcurrentTasks <= 0 {
 		maxConcurrentTasks = 2
 	}
-	m := &taskManager{service: service, policies: policies, path: filepath.Join(dataPath, "tasks"), maxLines: maxLines, workers: workers, taskSlots: make(chan struct{}, maxConcurrentTasks), tasks: map[string]*taskRuntime{}}
+	if retention <= 0 {
+		retention = 7 * 24 * time.Hour
+	}
+	if maxStorageBytes <= 0 {
+		maxStorageBytes = 10 << 30
+	}
+	m := &taskManager{service: service, policies: policies, path: filepath.Join(dataPath, "tasks"), maxLines: maxLines, workers: workers, taskSlots: make(chan struct{}, maxConcurrentTasks), retention: retention, maxStorageBytes: maxStorageBytes, tasks: map[string]*taskRuntime{}}
 	if err := os.MkdirAll(m.path, 0o700); err != nil {
 		return nil, err
 	}
@@ -265,6 +276,10 @@ func taskID() string {
 }
 
 func (m *taskManager) create(req batchCreateRequest) (BatchTask, error) {
+	return m.createWithParent(req, "")
+}
+
+func (m *taskManager) createWithParent(req batchCreateRequest, parentID string) (BatchTask, error) {
 	policy, ok := m.policies.get(strings.TrimSpace(req.PolicyID))
 	if !ok || !policy.Enabled {
 		return BatchTask{}, fmt.Errorf("policy not found or disabled")
@@ -277,14 +292,31 @@ func (m *taskManager) create(req batchCreateRequest) (BatchTask, error) {
 			return BatchTask{}, fmt.Errorf("line exceeds policy limit")
 		}
 	}
+	used, _ := directorySize(m.path)
+	estimated := int64(0)
+	for _, line := range req.Lines {
+		estimated += int64(len(line) * 3)
+	}
+	if used+estimated > m.maxStorageBytes {
+		return BatchTask{}, fmt.Errorf("task storage limit exceeded")
+	}
 	now := time.Now().UTC()
-	task := BatchTask{ID: taskID(), PolicyID: policy.ID, Status: "queued", Total: len(req.Lines), CreatedAt: now}
+	task := BatchTask{ID: taskID(), PolicyID: policy.ID, Status: "queued", Total: len(req.Lines), CreatedAt: now, ParentTaskID: parentID, ExpiresAt: now.Add(m.retention)}
 	ctx, cancel := context.WithCancel(context.Background())
 	runtime := &taskRuntime{task: task, cancel: cancel}
 	m.mu.Lock()
 	m.tasks[task.ID] = runtime
 	m.mu.Unlock()
 	if err := m.persist(&runtime.task); err != nil {
+		cancel()
+		return BatchTask{}, err
+	}
+	inputRaw, err := json.Marshal(req.Lines)
+	if err != nil {
+		cancel()
+		return BatchTask{}, err
+	}
+	if err := atomicWriteFile(filepath.Join(m.path, task.ID, "input.json"), inputRaw); err != nil {
 		cancel()
 		return BatchTask{}, err
 	}
@@ -346,23 +378,44 @@ func (m *taskManager) run(ctx context.Context, runtime *taskRuntime, policy Dete
 		}
 	}()
 	go func() { workers.Wait(); close(results) }()
+	pending := make(map[int]batchResult)
+	nextLine := 1
 	for result := range results {
-		if err := encoder.Encode(result); err != nil {
-			m.update(runtime, func(task *BatchTask) { task.Failed++ })
-			continue
-		}
-		m.update(runtime, func(task *BatchTask) {
-			task.Processed++
-			if result.Response != nil && result.Response.HasSensitive {
-				task.Sensitive++
+		pending[result.Line] = result
+		for {
+			ordered, ok := pending[nextLine]
+			if !ok {
+				break
 			}
-		})
+			delete(pending, nextLine)
+			writeErr := encoder.Encode(ordered)
+			m.mu.Lock()
+			if writeErr != nil {
+				runtime.task.Failed++
+			} else {
+				runtime.task.Processed++
+				if ordered.Response != nil && ordered.Response.HasSensitive {
+					runtime.task.Sensitive++
+				}
+			}
+			snapshot := runtime.task
+			m.mu.Unlock()
+			if snapshot.Processed%100 == 0 {
+				_ = m.persist(&snapshot)
+			}
+			nextLine++
+		}
 	}
 	if ctx.Err() != nil {
 		m.finish(runtime, "cancelled", "")
 		return
 	}
 	_ = file.Sync()
+	if info, statErr := file.Stat(); statErr == nil {
+		m.mu.Lock()
+		runtime.task.ResultBytes = info.Size()
+		m.mu.Unlock()
+	}
 	m.finish(runtime, "completed", "")
 }
 
@@ -429,20 +482,107 @@ func (m *taskManager) get(id string) (BatchTask, bool) {
 func (m *taskManager) cancel(id string) bool {
 	m.mu.RLock()
 	runtime, ok := m.tasks[id]
-	m.mu.RUnlock()
-	if !ok || runtime.cancel == nil || runtime.task.Status == "completed" {
+	if !ok {
+		m.mu.RUnlock()
 		return false
 	}
-	runtime.cancel()
+	cancel := runtime.cancel
+	status := runtime.task.Status
+	m.mu.RUnlock()
+	if cancel == nil || status == "completed" || status == "cancelled" || status == "failed" {
+		return false
+	}
+	cancel()
 	return true
 }
 
-func registerPlatformRoutes(r *gin.Engine, service *detectorService, token, dataPath string, maxLines, workers, maxConcurrentTasks int) error {
+func (m *taskManager) retry(id string) (BatchTask, error) {
+	task, ok := m.get(id)
+	if !ok {
+		return BatchTask{}, os.ErrNotExist
+	}
+	if task.Status == "queued" || task.Status == "running" {
+		return BatchTask{}, fmt.Errorf("task is still active")
+	}
+	raw, err := os.ReadFile(filepath.Join(m.path, id, "input.json"))
+	if err != nil {
+		return BatchTask{}, err
+	}
+	var lines []string
+	if err := json.Unmarshal(raw, &lines); err != nil {
+		return BatchTask{}, err
+	}
+	return m.createWithParent(batchCreateRequest{PolicyID: task.PolicyID, Lines: lines}, id)
+}
+
+func (m *taskManager) delete(id string) error {
+	m.mu.Lock()
+	runtime, ok := m.tasks[id]
+	if !ok {
+		m.mu.Unlock()
+		return os.ErrNotExist
+	}
+	if runtime.task.Status == "queued" || runtime.task.Status == "running" {
+		m.mu.Unlock()
+		return fmt.Errorf("active task cannot be deleted")
+	}
+	delete(m.tasks, id)
+	m.mu.Unlock()
+	return os.RemoveAll(filepath.Join(m.path, id))
+}
+
+func (m *taskManager) cleanup(now time.Time) (int, error) {
+	tasks := m.list()
+	removed := 0
+	for _, task := range tasks {
+		if task.ExpiresAt.IsZero() || task.ExpiresAt.After(now) || task.Status == "queued" || task.Status == "running" {
+			continue
+		}
+		if err := m.delete(task.ID); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
+}
+
+func directorySize(root string) (int64, error) {
+	var total int64
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		return nil
+	})
+	return total, err
+}
+
+func (m *taskManager) storageStatus() gin.H {
+	used, err := directorySize(m.path)
+	return gin.H{"used_bytes": used, "max_bytes": m.maxStorageBytes, "available_bytes": m.maxStorageBytes - used, "retention_hours": int(m.retention.Hours()), "error": errorText(err)}
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func registerPlatformRoutes(r *gin.Engine, service *detectorService, token, dataPath string, maxLines, workers, maxConcurrentTasks int, retention time.Duration, maxStorageBytes int64) error {
 	policies, err := newPolicyStore(dataPath)
 	if err != nil {
 		return err
 	}
-	tasks, err := newTaskManager(service, policies, dataPath, maxLines, workers, maxConcurrentTasks)
+	tasks, err := newTaskManager(service, policies, dataPath, maxLines, workers, maxConcurrentTasks, retention, maxStorageBytes)
 	if err != nil {
 		return err
 	}
@@ -507,6 +647,39 @@ func registerPlatformRoutes(r *gin.Engine, service *detectorService, token, data
 			return
 		}
 		c.JSON(202, gin.H{"cancel_requested": true})
+	})
+	admin.POST("/tasks/:id/retry", func(c *gin.Context) {
+		task, err := tasks.retry(c.Param("id"))
+		if errors.Is(err, os.ErrNotExist) {
+			writeAPIError(c, 404, "TASK_NOT_FOUND", "任务不存在", nil)
+			return
+		}
+		if err != nil {
+			writeAPIError(c, 409, "TASK_NOT_RETRYABLE", err.Error(), nil)
+			return
+		}
+		c.JSON(http.StatusAccepted, task)
+	})
+	admin.DELETE("/tasks/:id", func(c *gin.Context) {
+		err := tasks.delete(c.Param("id"))
+		if errors.Is(err, os.ErrNotExist) {
+			writeAPIError(c, 404, "TASK_NOT_FOUND", "任务不存在", nil)
+			return
+		}
+		if err != nil {
+			writeAPIError(c, 409, "TASK_NOT_DELETABLE", err.Error(), nil)
+			return
+		}
+		c.Status(http.StatusNoContent)
+	})
+	admin.GET("/storage", func(c *gin.Context) { c.JSON(http.StatusOK, tasks.storageStatus()) })
+	admin.POST("/tasks/cleanup", func(c *gin.Context) {
+		removed, err := tasks.cleanup(time.Now().UTC())
+		if err != nil {
+			writeAPIError(c, 500, "CLEANUP_FAILED", "任务清理失败", nil)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"removed": removed})
 	})
 	admin.GET("/tasks/:id/results", func(c *gin.Context) {
 		task, ok := tasks.get(c.Param("id"))
