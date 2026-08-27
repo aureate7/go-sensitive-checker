@@ -399,6 +399,11 @@ curl -X POST http://localhost:8008/api/admin/wordlist/reload \
 - `POST /api/admin/whitelist`：body 为 `{"word": "...", "categories": ["..."], "reason": "..."}`，categories 省略表示全类别；写入后自动重建索引并记录审计日志。
 - `DELETE /api/admin/whitelist`：body 为 `{"word": "..."}`。
 
+复核工作台（前端 `/reviews`）结案为"误报"时会产生白名单候选（`GET /api/platform/feedback-candidates`），并在页面上提供一键落地：
+
+- `POST /api/platform/feedback-candidates/:id/apply`：将 whitelist 类型候选写入白名单文件、热重载索引，候选状态置为 applied。
+- `POST /api/platform/feedback-candidates/:id/dismiss`：忽略该候选。
+
 仓库自带示例词库与白名单样例（`go-sensitive-checker/temp/`），克隆后即可直接启动验证；生产环境请替换为正式词库。
 
 ### 9) 评测集
