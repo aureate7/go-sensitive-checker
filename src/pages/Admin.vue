@@ -15,23 +15,48 @@
         <el-card><template #header>可回滚版本</template><div v-for="item in versions" :key="item.version" class="version-row"><code>{{ item.version }}</code><el-button size="small" @click="rollback(item.version)">回滚</el-button></div><el-empty v-if="!versions.length" description="暂无快照" /></el-card>
         <el-card><template #header>最近审计</template><div v-for="item in audits" :key="`${item.time}:${item.request_id}`" class="audit-row"><strong>{{ item.action }}</strong><span>{{ item.category }} {{ item.word }}</span><small>{{ formatTime(item.time) }} · {{ item.success ? '成功' : '失败' }}</small></div><el-empty v-if="!audits.length" description="暂无记录" /></el-card>
       </section>
+      <el-card class="section-card"><template #header><div class="section-title"><span>白名单管理（误报豁免，{{ whitelistCount }} 条）</span><div class="actions"><el-select v-model="whitelistForm.categories" multiple clearable placeholder="全部类别（可多选限定）" style="min-width:260px"><el-option v-for="(label,key) in categories" :key="key" :label="label" :value="key" /></el-select><el-input v-model="whitelistForm.word" clearable placeholder="豁免词条" /><el-button type="primary" @click="addWhitelist">添加</el-button></div></div></template><div class="word-table"><div v-for="entry in whitelistEntries" :key="entry.key" class="word-row"><span>{{ entry.word }}</span><el-tag>{{ entry.scope }}</el-tag><el-button type="danger" plain size="small" @click="removeWhitelist(entry)">移除</el-button></div><el-empty v-if="!whitelistEntries.length" description="白名单为空" /></div></el-card>
     </template>
   </div>
 </template>
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
-import { applyAdminImport, createAdminWord, deleteAdminWord, describeAPIError, fetchAdminWords, fetchAuditEntries, fetchCategories, fetchWordlistVersions, previewAdminImport, rollbackWordlist } from '@/services/api'
+import { applyAdminImport, createAdminWhitelist, createAdminWord, deleteAdminWhitelist, deleteAdminWord, describeAPIError, fetchAdminWhitelist, fetchAdminWords, fetchAuditEntries, fetchCategories, fetchWordlistVersions, previewAdminImport, rollbackWordlist } from '@/services/api'
 
 defineOptions({ name: 'WordlistAdmin' })
 const token = ref(sessionStorage.getItem('sensitive_admin_token') || '')
 const connected = ref(false), error = ref(''), categories = ref({}), preview = ref(null), versions = ref([]), audits = ref([])
 const words = reactive({ items: [], total: 0 }), filters = reactive({ category: '', q: '' })
 const form = reactive({ category: '', word: '', reason: '' }), importForm = reactive({ category: '', content: '', reason: '' })
+const whitelistEntries = ref([]), whitelistForm = reactive({ word: '', categories: [] })
+const whitelistCount = ref(0)
 const report = (err) => { error.value = describeAPIError(err).message }
 const loadWords = async () => { try { Object.assign(words, await fetchAdminWords(token.value, filters)); error.value = '' } catch (err) { report(err); connected.value = false } }
 const refreshSidebars = async () => { const [v,a] = await Promise.all([fetchWordlistVersions(token.value), fetchAuditEntries(token.value)]); versions.value=v.items||[]; audits.value=a.items||[] }
-const connect = async () => { sessionStorage.setItem('sensitive_admin_token', token.value); connected.value=true; try { await Promise.all([loadWords(), refreshSidebars()]) } catch (err) { report(err); connected.value=false } }
+const loadWhitelist = async () => {
+  const data = await fetchAdminWhitelist(token.value)
+  const list = []
+  for (const word of data.global || []) list.push({ key: `g:${word}`, word, scope: '全部类别' })
+  for (const [category, words] of Object.entries(data.by_category || {})) {
+    for (const word of words || []) list.push({ key: `c:${category}:${word}`, word, scope: categories.value[category] || category })
+  }
+  whitelistEntries.value = list
+  whitelistCount.value = list.length
+}
+const addWhitelist = async () => {
+  if (!whitelistForm.word.trim()) return
+  try {
+    await createAdminWhitelist(token.value, { word: whitelistForm.word, categories: whitelistForm.categories, reason: '控制台添加' })
+    whitelistForm.word = ''; whitelistForm.categories = []
+    await loadWhitelist()
+  } catch(err){ report(err) }
+}
+const removeWhitelist = async (entry) => {
+  if(!window.confirm(`确认移除白名单“${entry.word}”（${entry.scope}）？`)) return
+  try { await deleteAdminWhitelist(token.value, { word: entry.word, reason: '控制台移除' }); await loadWhitelist() } catch(err){ report(err) }
+}
+const connect = async () => { sessionStorage.setItem('sensitive_admin_token', token.value); connected.value=true; try { await Promise.all([loadWords(), refreshSidebars(), loadWhitelist()]) } catch (err) { report(err); connected.value=false } }
 const addWord = async () => { try { await createAdminWord(token.value, form); form.word=''; await Promise.all([loadWords(), refreshSidebars()]) } catch(err){ report(err) } }
 const removeWord = async (item) => { if(!window.confirm(`确认删除“${item.word}”？`)) return; try { await deleteAdminWord(token.value,{category:item.category,word:item.word,reason:'控制台删除'}); await Promise.all([loadWords(),refreshSidebars()]) } catch(err){report(err)} }
 const previewImport = async () => { try { preview.value=await previewAdminImport(token.value,importForm) } catch(err){report(err)} }

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -102,6 +103,102 @@ func TestReviewFeedbackToWhitelistLoop(t *testing.T) {
 	if rec.Code != http.StatusOK && rec.Code != http.StatusConflict {
 		t.Fatalf("double apply unexpected code %d", rec.Code)
 	}
+}
+
+func TestReviewWordlistCandidateApply(t *testing.T) {
+	router, base := setupReviewFlowRouter(t)
+
+	doJSON := func(method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strPtr(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer tok")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// 漏报候选必须指定类别
+	rec := doJSON(http.MethodPost, "/api/platform/reviews", `{"policy_id":"default","text":"常规沟通内容"}`)
+	var created struct {
+		Task ReviewTask `json:"task"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	_, _ = storeClaim(t, doJSON, created.Task.ID)
+	rec = doJSON(http.MethodPost, "/api/platform/reviews/"+created.Task.ID+"/resolve",
+		`{"reviewer":"alice","conclusion":"false_negative","candidate_type":"wordlist","value":"新型违规词"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resolve without category should still create candidate: %d", rec.Code)
+	}
+
+	// 无类别的 wordlist 候选：应用时应返回 422
+	rec = doJSON(http.MethodGet, "/api/platform/feedback-candidates", "")
+	var preList struct {
+		Items []FeedbackCandidate `json:"items"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &preList)
+	for _, item := range preList.Items {
+		if item.Status == "pending" && item.Category == "" {
+			if rec = doJSON(http.MethodPost, "/api/platform/feedback-candidates/"+item.ID+"/apply", ""); rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("apply without category should 422, got %d", rec.Code)
+			}
+		}
+	}
+
+	// 重新构造带类别的候选再应用
+	rec = doJSON(http.MethodPost, "/api/platform/reviews", `{"policy_id":"default","text":"另一段文本"}`)
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	_, _ = storeClaim(t, doJSON, created.Task.ID)
+	rec = doJSON(http.MethodPost, "/api/platform/reviews/"+created.Task.ID+"/resolve",
+		`{"reviewer":"alice","conclusion":"false_negative","candidate_type":"wordlist","value":"新型违规词","category":"advertising_low"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resolve = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 拿到候选 ID
+	rec = doJSON(http.MethodGet, "/api/platform/feedback-candidates", "")
+	var list struct {
+		Items []FeedbackCandidate `json:"items"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &list)
+	var target FeedbackCandidate
+	for _, item := range list.Items {
+		if item.Status == "pending" && item.Category == "advertising_low" {
+			target = item
+		}
+	}
+	if target.ID == "" {
+		t.Fatal("pending wordlist candidate not found")
+	}
+
+	// 应用 → 走 snapshot/发布流程，词进入词库并可检测
+	rec = doJSON(http.MethodPost, "/api/platform/feedback-candidates/"+target.ID+"/apply", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply wordlist candidate = %d: %s", rec.Code, rec.Body.String())
+	}
+	detector := NewDetector(base)
+	resp := detector.Detect("现在就来新型违规词", []string{"advertising_low"})
+	found := false
+	for _, ev := range resp.HitEvidences {
+		if ev.Word == "新型违规词" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("applied word should be detectable: %+v", resp.HitEvidences)
+	}
+	// 词文件确实包含新词
+	data, err := os.ReadFile(filepath.Join(base, "拉人广告敏感词", "低敏感词.txt"))
+	if err != nil || !strings.Contains(string(data), "新型违规词") {
+		t.Fatalf("word file missing applied entry: %v", err)
+	}
+}
+
+func storeClaim(t *testing.T, doJSON func(string, string, string) *httptest.ResponseRecorder, id string) (*httptest.ResponseRecorder, error) {
+	t.Helper()
+	rec := doJSON(http.MethodPost, "/api/platform/reviews/"+id+"/claim", `{"reviewer":"alice"}`)
+	var task ReviewTask
+	_ = json.Unmarshal(rec.Body.Bytes(), &task)
+	return rec, nil
 }
 
 func TestReviewStoreCandidateStatusGuards(t *testing.T) {

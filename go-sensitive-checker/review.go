@@ -298,7 +298,28 @@ func registerReviewRoutes(admin *gin.RouterGroup, service *detectorService, poli
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"applied": true, "candidate": candidate, "wordlist": service.reload()})
-		default:
+		case "wordlist":
+			// 漏报候选：按管理端正规发布流程加入词库（快照 → 原子写入 → 校验重载）。
+			cat := strings.TrimSpace(candidate.Category)
+			if cat == "" {
+				writeAPIError(c, 422, "CATEGORY_REQUIRED", "词库候选必须指定类别", nil)
+				return
+			}
+			if _, valid := CategoryDisplay[cat]; !valid {
+				writeAPIError(c, 422, "INVALID_CATEGORY", "候选类别无效", nil)
+				return
+			}
+			manager := newAdminManager(service, filepath.Dir(store.path))
+			status, version, err := manager.mutate(cat, []string{candidate.Value}, "")
+			if err != nil {
+				writeAPIError(c, 422, "WORDLIST_APPLY_FAILED", "加入词库失败", gin.H{"reason": err.Error()})
+				return
+			}
+			if _, err := store.setCandidateStatus(candidate.ID, "applied"); err != nil {
+				writeAPIError(c, http.StatusConflict, "CANDIDATE_CONFLICT", err.Error(), nil)
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"applied": true, "candidate": candidate, "version": version, "wordlist": status})
 			writeAPIError(c, 422, "UNSUPPORTED_CANDIDATE_TYPE", "该候选类型暂不支持自动应用", nil)
 		}
 	})

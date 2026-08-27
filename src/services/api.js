@@ -14,6 +14,9 @@ export const detectText = async (payload, signal) =>
 
 const adminHeaders = (token) => ({ Authorization: `Bearer ${token}` })
 export const fetchAdminWords = async (token, params) => (await api.get('/admin/words', { params, headers: adminHeaders(token) })).data
+export const fetchAdminWhitelist = async (token) => (await api.get('/admin/whitelist', { headers: adminHeaders(token) })).data
+export const createAdminWhitelist = async (token, payload) => (await api.post('/admin/whitelist', payload, { headers: adminHeaders(token) })).data
+export const deleteAdminWhitelist = async (token, payload) => (await api.delete('/admin/whitelist', { data: payload, headers: adminHeaders(token) })).data
 export const createAdminWord = async (token, payload) => (await api.post('/admin/words', payload, { headers: adminHeaders(token) })).data
 export const deleteAdminWord = async (token, payload) => (await api.delete('/admin/words', { data: payload, headers: adminHeaders(token) })).data
 export const previewAdminImport = async (token, payload) => (await api.post('/admin/words/import/preview', payload, { headers: adminHeaders(token) })).data

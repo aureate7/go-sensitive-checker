@@ -401,8 +401,10 @@ curl -X POST http://localhost:8008/api/admin/wordlist/reload \
 
 复核工作台（前端 `/reviews`）结案为"误报"时会产生白名单候选（`GET /api/platform/feedback-candidates`），并在页面上提供一键落地：
 
-- `POST /api/platform/feedback-candidates/:id/apply`：将 whitelist 类型候选写入白名单文件、热重载索引，候选状态置为 applied。
+- `POST /api/platform/feedback-candidates/:id/apply`：将 whitelist 类型候选写入白名单文件、热重载索引，候选状态置为 applied；wordlist 类型候选走管理端快照→原子写入→校验重载的正式发布流程加入对应类别词库（版本号随响应返回）。
 - `POST /api/platform/feedback-candidates/:id/dismiss`：忽略该候选。
+
+管理控制台（`/admin`）提供白名单可视化卡片：查看全部与分类别豁免词条、多选类别添加、一键移除，变更即时生效并记入审计日志。
 
 仓库自带示例词库与白名单样例（`go-sensitive-checker/temp/`），克隆后即可直接启动验证；生产环境请替换为正式词库。
 
