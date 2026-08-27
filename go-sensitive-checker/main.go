@@ -35,6 +35,8 @@ type serverConfig struct {
 	MaxBodyBytes    int64
 	MaxTextRunes    int
 	MaxConcurrent   int
+	RateLimitRPM    int
+	RateLimitBurst  int
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
@@ -89,6 +91,8 @@ func loadServerConfig() serverConfig {
 		MaxBodyBytes:    int64(envInt("SENSITIVE_MAX_BODY_BYTES", 1<<20)),
 		MaxTextRunes:    envInt("SENSITIVE_MAX_TEXT_RUNES", 20000),
 		MaxConcurrent:   envInt("SENSITIVE_MAX_CONCURRENT", 8),
+		RateLimitRPM:    envInt("SENSITIVE_RATE_LIMIT_RPM", 120),
+		RateLimitBurst:  envInt("SENSITIVE_RATE_LIMIT_BURST", 0),
 		ReadTimeout:     time.Duration(envInt("SENSITIVE_READ_TIMEOUT_SECONDS", 10)) * time.Second,
 		WriteTimeout:    time.Duration(envInt("SENSITIVE_WRITE_TIMEOUT_SECONDS", 30)) * time.Second,
 		IdleTimeout:     time.Duration(envInt("SENSITIVE_IDLE_TIMEOUT_SECONDS", 60)) * time.Second,
@@ -129,6 +133,15 @@ func normalizedServerConfig(cfg serverConfig) serverConfig {
 	}
 	if cfg.MaxConcurrent <= 0 {
 		cfg.MaxConcurrent = 8
+	}
+	if cfg.RateLimitRPM <= 0 {
+		cfg.RateLimitRPM = 120
+	}
+	if cfg.RateLimitBurst <= 0 {
+		cfg.RateLimitBurst = cfg.RateLimitRPM / 10
+		if cfg.RateLimitBurst < 10 {
+			cfg.RateLimitBurst = 10
+		}
 	}
 	if cfg.MaxMappings <= 0 {
 		cfg.MaxMappings = 500
@@ -177,7 +190,15 @@ func newRouter(service *detectorService, cfg serverConfig) *gin.Engine {
 	}
 
 	semaphore := make(chan struct{}, cfg.MaxConcurrent)
+	detectLimiter := newRateLimiter(cfg.RateLimitRPM, cfg.RateLimitBurst)
 	r.POST("/api/detect", func(c *gin.Context) {
+		if ok, retry := detectLimiter.allow(c.ClientIP()); !ok {
+			c.Header("Retry-After", retry.Round(time.Second).String())
+			writeAPIError(c, http.StatusTooManyRequests, "RATE_LIMITED", "请求过于频繁，请稍后重试", gin.H{
+				"retry_after_ms": retry.Milliseconds(),
+			})
+			return
+		}
 		service.detectTotal.Add(1)
 		detector := service.detector()
 		if !detector.WordListStatus().Ready {
