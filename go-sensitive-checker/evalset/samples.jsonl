@@ -1,0 +1,13 @@
+# 敏感词检测评测集（脱敏示例）
+# 格式：JSONL，每行一条样本；# 开头为注释。
+# hits 为预期命中（词库词 + 类别）；hits 为空数组表示应零命中的干净文本。
+# 类别键与后端 CategoryDisplay 一致，如 advertising_high / abusive_low / pornographic_high 等。
+{"id":"ad_001","text":"恭喜您被抽中！立即点击链接免费领取最新款手机","hits":[{"word":"免费领取","category":"advertising_high"}],"note":"典型营销诱导"}
+{"id":"ad_002","text":"本公司专业提供代开发票服务，价格优惠，欢迎咨询","hits":[{"word":"代开发票","category":"advertising_high"}],"note":"违法广告"}
+{"id":"ad_003","text":"加微信好友，天天领红包，日赚三百不是梦","hits":[{"word":"加微信","category":"advertising_low"},{"word":"日赚","category":"advertising_low"}],"note":"引流话术"}
+{"id":"abusive_001","text":"你就是个笨蛋，连这么简单的事都做不好","hits":[{"word":"笨蛋","category":"abusive_low"}],"note":  "轻度辱骂"}
+{"id":"clean_001","text":"今天天气很好，我们去公园散步吧。","hits":[],"note":"日常寒暄"}
+{"id":"clean_002","text":"会议定在明天上午十点，请准时参加并提前阅读材料。","hits":[],"note":  "工作沟通"}
+{"id":"clean_003","text":"","hits":[],"note":"空文本边界"}
+{"id":"obfuscation_001","text":"免-费-领-取 大奖已经等您多时","hits":[{"word":"免费领取","category":"advertising_high"}],"note":"分隔符混淆，依赖去符号匹配"}
+{"id":"mixed_001","text":"限时免费领取优惠券，另提供代开发票渠道","hits":[{"word":"免费领取","category":"advertising_high"},{"word":"代开发票","category":"advertising_high"}],"note":"多类别混合"}

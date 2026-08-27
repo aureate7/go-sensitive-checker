@@ -377,6 +377,11 @@ func subtleTokenMismatch(header, expected string) bool {
 }
 
 func main() {
+	// 离线评测模式：go run . -eval evalset/samples.jsonl
+	if len(os.Args) > 1 && os.Args[1] == "-eval" {
+		runEval(os.Args[2:])
+		return
+	}
 	cfg := normalizedServerConfig(loadServerConfig())
 	detector := NewDetector(cfg.WordListPath)
 	service := newDetectorService(detector)
