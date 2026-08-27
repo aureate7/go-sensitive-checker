@@ -68,13 +68,13 @@ func TestComputeMetricsDuplicateHitsConsumedOnce(t *testing.T) {
 	resps := []DetectResponse{
 		{HitEvidences: []HitEvidence{
 			{Word: "重复词", Category: "abusive_low"},
-			{Word: "重复词", Category: "abusive_low"}, // 第二次视为 FP
+			{Word: "重复词", Category: "abusive_low"}, // 多策略产生的重复证据应被去重，不另计 FP
 		}},
 	}
 	report, _ := ComputeMetrics(samples, resps)
 	e := report[0]
-	if e.TruePos != 1 || e.FalsePos != 1 || e.FalseNeg != 0 {
-		t.Fatalf("expected tp=1 fp=1 fn=0, got %+v", e)
+	if e.TruePos != 1 || e.FalsePos != 0 || e.FalseNeg != 0 {
+		t.Fatalf("expected tp=1 fp=0 fn=0 after dedupe, got %+v", e)
 	}
 }
 

@@ -40,7 +40,9 @@ __screenshots__/
 *.zip
 
 # data
-go-sensitive-checker/temp/
+go-sensitive-checker/temp/**
+!go-sensitive-checker/temp/**/
+!go-sensitive-checker/temp/**/*.txt
 go-sensitive-checker/sensitiveChecker
 go-sensitive-checker/*.log
 go-sensitive-checker/data/

@@ -97,8 +97,15 @@ func ComputeMetrics(samples []EvalSample, responses []DetectResponse) ([]EvalRep
 			cc.fn++
 		}
 
+		seen := map[string]struct{}{}
 		for _, ev := range resp.HitEvidences {
 			key := ev.Category + "\x00" + ev.Word
+			// 同一词条会因多策略（精确/去符号/归一化等）产生多条证据，只计一次。
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+
 			if expected[key] > 0 {
 				expected[key]--
 				cc := counts[ev.Category]

@@ -59,6 +59,9 @@ type Detector struct {
 	fuzzyIndex     map[string]*AliasIndex         // cat -> fuzzy alias index
 	pinyinIndex    map[string]*AliasIndex         // cat -> pinyin alias index
 
+	whitelistGlobal     map[string]struct{}
+	whitelistByCategory map[string]map[string]struct{}
+
 	normalizer    *Normalizer
 	fuzzyMatcher  *FuzzyMatcher
 	pinyinMatcher *PinyinMatcher
@@ -103,6 +106,7 @@ func NewDetectorWithConfig(basePath string, cfg DetectorConfig) *Detector {
 		d.sensitiveWords[cat] = make(map[string]struct{})
 	}
 	d.loadSensitiveWords()
+	d.loadWhitelist()
 	d.finalizeLoadStatus()
 	d.buildAutomata()
 	d.buildEnhancedIndexes()
@@ -406,6 +410,10 @@ func (d *Detector) DetectWithContext(ctx context.Context, text string, categorie
 
 		addHit := func(word, matchType string, start, end int, normalizedUsed, pinyinUsed bool) {
 			if word == "" || start < 0 || end <= start {
+				return
+			}
+			// 白名单豁免：命中词库词在该类别下被排除时不计入任何统计。
+			if d.isWhitelisted(cat, word) {
 				return
 			}
 			matchedText := safeSliceRunes(text, start, end)

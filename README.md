@@ -382,6 +382,36 @@ curl -X POST http://localhost:8008/api/admin/wordlist/reload \
 - 每次变更前自动创建文件快照，支持查看版本和回滚。
 - 查看不包含检测原文的管理审计日志。
 
+### 8) 白名单（豁免误报）
+
+词库根目录下可放置 `白名单.txt`，命中的词库词条在指定范围内不再计入检测结果：
+
+```text
+# 全类别豁免（每行一个词条）
+普通名称XYZ
+# 仅对指定类别豁免（TAB 分隔，逗号列出类别键）
+免费领取\tadvertising_high
+```
+
+被白名单豁免的命中不会出现在 `hit_evidences`、统计和打码建议中。也可通过管理接口维护（需要 `SENSITIVE_ADMIN_TOKEN`）：
+
+- `GET /api/admin/whitelist`：查看当前全量与分类别条目。
+- `POST /api/admin/whitelist`：body 为 `{"word": "...", "categories": ["..."], "reason": "..."}`，categories 省略表示全类别；写入后自动重建索引并记录审计日志。
+- `DELETE /api/admin/whitelist`：body 为 `{"word": "..."}`。
+
+仓库自带示例词库与白名单样例（`go-sensitive-checker/temp/`），克隆后即可直接启动验证；生产环境请替换为正式词库。
+
+### 9) 评测集
+
+`go-sensitive-checker/evalset/samples.jsonl` 提供脱敏标注语料，格式为 JSONL（`id` / `text` / `hits`）。运行离线评测：
+
+```bash
+cd go-sensitive-checker
+go run . -eval evalset/samples.jsonl
+```
+
+输出各类别 TP/FP/FN 与 Precision/Recall/F1；总体 F1 低于 0.8 时进程以退出码 2 结束，可直接接入 CI 作为词库变更门禁。
+
 管理令牌仅保存在浏览器 `sessionStorage`，关闭标签页后自动清除。生产环境必须通过 HTTPS 使用管理控制台，并设置高强度随机令牌。
 
 ### 8) 检测策略与批量任务

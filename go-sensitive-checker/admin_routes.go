@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -142,6 +143,118 @@ func registerAdminRoutes(r *gin.Engine, manager *adminManager, token string) {
 		}
 		c.JSON(http.StatusOK, gin.H{"items": entries})
 	})
+
+	admin.GET("/whitelist", func(c *gin.Context) {
+		global, byCategory := manager.service.detector().WhitelistEntries()
+		c.JSON(http.StatusOK, gin.H{"global": global, "by_category": byCategory})
+	})
+
+	admin.POST("/whitelist", func(c *gin.Context) {
+		var req whitelistMutationRequest
+		if c.ShouldBindJSON(&req) != nil {
+			writeAPIError(c, http.StatusBadRequest, "INVALID_JSON", "请求体不是有效 JSON", nil)
+			return
+		}
+		req.Word = strings.TrimSpace(req.Word)
+		if req.Word == "" || len([]rune(req.Word)) > 256 {
+			writeAPIError(c, http.StatusUnprocessableEntity, "INVALID_WORD", "词条为空或超过 256 个字符", nil)
+			return
+		}
+		for _, cat := range req.Categories {
+			if _, ok := CategoryDisplay[cat]; !ok {
+				writeAPIError(c, http.StatusUnprocessableEntity, "INVALID_CATEGORY", "检测类别无效", nil)
+				return
+			}
+		}
+		detector := manager.service.detector()
+		err := mutateWhitelistFile(detector.basePath, req.Word, req.Categories, true)
+		manager.audit(auditFromContext(c, "whitelist.create", strings.Join(req.Categories, ","), req.Word, req.Reason, "", err))
+		if err != nil {
+			writeAPIError(c, http.StatusUnprocessableEntity, "WHITELIST_CREATE_FAILED", "新增白名单失败", nil)
+			return
+		}
+		c.JSON(http.StatusCreated, gin.H{"created": true, "wordlist": manager.service.reload()})
+	})
+
+	admin.DELETE("/whitelist", func(c *gin.Context) {
+		var req whitelistMutationRequest
+		if c.ShouldBindJSON(&req) != nil {
+			writeAPIError(c, http.StatusBadRequest, "INVALID_JSON", "请求体不是有效 JSON", nil)
+			return
+		}
+		req.Word = strings.TrimSpace(req.Word)
+		if req.Word == "" {
+			writeAPIError(c, http.StatusUnprocessableEntity, "INVALID_WORD", "词条为空", nil)
+			return
+		}
+		detector := manager.service.detector()
+		err := mutateWhitelistFile(detector.basePath, req.Word, nil, false)
+		if errors.Is(err, os.ErrNotExist) {
+			manager.audit(auditFromContext(c, "whitelist.delete", "", req.Word, req.Reason, "", err))
+			writeAPIError(c, http.StatusNotFound, "WHITELIST_NOT_FOUND", "白名单词条不存在", nil)
+			return
+		}
+		manager.audit(auditFromContext(c, "whitelist.delete", "", req.Word, req.Reason, "", err))
+		if err != nil {
+			writeAPIError(c, http.StatusUnprocessableEntity, "WHITELIST_DELETE_FAILED", "删除白名单失败", nil)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"deleted": true, "wordlist": manager.service.reload()})
+	})
+}
+
+type whitelistMutationRequest struct {
+	Word       string   `json:"word"`
+	Categories []string `json:"categories,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
+}
+
+// mutateWhitelistFile 增删 白名单.txt 中的词条（添加时 categories 为空表示全类别）。
+func mutateWhitelistFile(basePath, word string, categories []string, add bool) error {
+	path := filepath.Join(basePath, WhitelistFileName)
+	lines := readNonEmptyLines(path)
+
+	entry := word
+	if len(categories) > 0 {
+		entry = entry + "\t" + strings.Join(categories, ",")
+	}
+
+	var out []string
+	found := false
+	for _, l := range lines {
+		w, _ := parseWhitelistLine(l)
+		if w == word && !add {
+			found = true
+			continue // 删除时跳过该词条的所有行
+		}
+		out = append(out, l)
+	}
+	if add {
+		out = append(out, entry)
+	} else if !found {
+		return os.ErrNotExist
+	}
+
+	content := strings.Join(out, "\n")
+	if content != "" {
+		content += "\n"
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func readNonEmptyLines(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var lines []string
+	for _, l := range strings.Split(string(data), "\n") {
+		l = strings.TrimRight(l, "\r")
+		if strings.TrimSpace(l) != "" && !strings.HasPrefix(strings.TrimSpace(l), "#") {
+			lines = append(lines, l)
+		}
+	}
+	return lines
 }
 
 func auditFromContext(c *gin.Context, action, category, word, reason, version string, err error) auditEntry {
