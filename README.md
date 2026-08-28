@@ -418,6 +418,21 @@ curl -X POST http://localhost:8008/api/admin/wordlist/reload \
 - `review_backlog`：复核队列 pending 达到 `SENSITIVE_WEBHOOK_BACKLOG_THRESHOLD`（默认 20）时告警，回落后允许再次告警。
 - `SENSITIVE_WEBHOOK_MAX_PER_DAY`（默认 50）限制每日推送上限，防止通知风暴。
 
+### 12) LLM 逐命中语境复核
+
+在全文辅助鉴别（`enable_llm_assist`）之外，可开启逐命中复核（`SENSITIVE_ENABLE_LLM_HIT_REVIEW=true`）：检测完成后，对非高风险命中的证据截取前后 60 字上下文，批量询问 LLM 该词在语境中是否为真实违规，返回三级结论：
+
+- `confirm`：确认违规，维持命中。
+- `demote`：疑似误报（如新闻转述、正常词形巧合），证据带 `llm_verdict=demote` 标注。
+- `review`：语境不足，建议人工复核。
+
+成本护栏：
+
+- 结果按"上下文+词+类别+匹配方式"哈希缓存，相同命中不再重复调用。
+- 每次检测最多 20 条命中一批，单日调用上限 `SENSITIVE_LLM_HIT_REVIEW_DAILY_LIMIT`（默认 1000），耗尽后自动熔断降级为纯规则模式，降级原因记录在 `llm_assist.error`。
+- 高风险命中（`risk_level=high`）不走 LLM，直接信任规则引擎。
+- 前端命中词悬浮提示中展示 LLM 复核结论与原因。
+
 仓库自带示例词库与白名单样例（`go-sensitive-checker/temp/`），克隆后即可直接启动验证；生产环境请替换为正式词库。
 
 ### 9) 评测集

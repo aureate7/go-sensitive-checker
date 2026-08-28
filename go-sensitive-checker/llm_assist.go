@@ -34,16 +34,17 @@ const llmAssistSystemPrompt = `你是内容安全审核助手。请基于输入�
 3) 若文本明显无风险，risk_level= safe 且 should_review=false。`
 
 type LLMAssistResult struct {
-	Enabled        bool     `json:"enabled"`
-	Used           bool     `json:"used"`
-	Model          string   `json:"model,omitempty"`
-	RiskLevel      string   `json:"risk_level,omitempty"`
-	ShouldReview   bool     `json:"should_review"`
-	Reason         string   `json:"reason,omitempty"`
-	SuspectedTerms []string `json:"suspected_terms,omitempty"`
-	Confidence     float64  `json:"confidence,omitempty"`
-	LatencyMS      int64    `json:"latency_ms,omitempty"`
-	Error          string   `json:"error,omitempty"`
+	Enabled        bool           `json:"enabled"`
+	Used           bool           `json:"used"`
+	Model          string         `json:"model,omitempty"`
+	RiskLevel      string         `json:"risk_level,omitempty"`
+	ShouldReview   bool           `json:"should_review"`
+	Reason         string         `json:"reason,omitempty"`
+	SuspectedTerms []string       `json:"suspected_terms,omitempty"`
+	Confidence     float64        `json:"confidence,omitempty"`
+	LatencyMS      int64          `json:"latency_ms,omitempty"`
+	HitReviews     []HitLLMReview `json:"hit_reviews,omitempty"`
+	Error          string         `json:"error,omitempty"`
 }
 
 type llmAssistClient struct {
@@ -135,56 +136,11 @@ func (c *llmAssistClient) Analyze(ctx context.Context, text string, categories [
 		return LLMAssistResult{}, fmt.Errorf("marshal llm payload failed: %w", err)
 	}
 
-	reqBody := llmAssistChatRequest{
-		Model:       c.model,
-		Temperature: 0.1,
-		Messages: []llmAssistChatMessage{
-			{
-				Role:    "system",
-				Content: llmAssistSystemPrompt,
-			},
-			{
-				Role:    "user",
-				Content: "请对以下 JSON 输入做辅助鉴别并按要求输出 JSON：\n" + string(payloadJSON),
-			},
-		},
-	}
-	rawBody, err := json.Marshal(reqBody)
+	content, err := c.chat(ctx, llmAssistSystemPrompt,
+		"请对以下 JSON 输入做辅助鉴别并按要求输出 JSON：\n"+string(payloadJSON))
 	if err != nil {
-		return LLMAssistResult{}, fmt.Errorf("marshal llm request failed: %w", err)
+		return LLMAssistResult{}, err
 	}
-
-	url := c.baseURL + "/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawBody))
-	if err != nil {
-		return LLMAssistResult{}, fmt.Errorf("build llm request failed: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return LLMAssistResult{}, fmt.Errorf("llm request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return LLMAssistResult{}, fmt.Errorf("read llm response failed: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return LLMAssistResult{}, fmt.Errorf("llm api returned status %d", resp.StatusCode)
-	}
-
-	var chatResp llmAssistChatResponse
-	if err := json.Unmarshal(respBytes, &chatResp); err != nil {
-		return LLMAssistResult{}, fmt.Errorf("decode llm response failed: %w", err)
-	}
-	if len(chatResp.Choices) == 0 {
-		return LLMAssistResult{}, fmt.Errorf("llm response contains no choices")
-	}
-
-	content := strings.TrimSpace(chatResp.Choices[0].Message.Content)
 	if content == "" {
 		return LLMAssistResult{}, fmt.Errorf("llm response content is empty")
 	}
@@ -213,6 +169,70 @@ func (c *llmAssistClient) Analyze(ctx context.Context, text string, categories [
 		Confidence:     clampConfidence(output.Confidence),
 		LatencyMS:      time.Since(startAt).Milliseconds(),
 	}, nil
+}
+
+// chat 执行一次 chat/completions 调用并返回模型文本内容，供全文辅助与逐命中复核共用。
+func (c *llmAssistClient) chat(ctx context.Context, system, user string) (string, error) {
+	if c == nil {
+		return "", fmt.Errorf("llm assist client not initialized")
+	}
+	if c.baseURL == "" {
+		return "", fmt.Errorf("LLM base URL not configured")
+	}
+	if c.apiKey == "" {
+		return "", fmt.Errorf("LLM API key not configured")
+	}
+	if c.model == "" {
+		return "", fmt.Errorf("LLM model not configured")
+	}
+
+	reqBody := llmAssistChatRequest{
+		Model:       c.model,
+		Temperature: 0.1,
+		Messages: []llmAssistChatMessage{
+			{Role: "system", Content: system},
+			{Role: "user", Content: user},
+		},
+	}
+	rawBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal llm request failed: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(rawBody))
+	if err != nil {
+		return "", fmt.Errorf("build llm request failed: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("llm request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("read llm response failed: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("llm api returned status %d", resp.StatusCode)
+	}
+
+	var chatResp llmAssistChatResponse
+	if err := json.Unmarshal(respBytes, &chatResp); err != nil {
+		return "", fmt.Errorf("decode llm response failed: %w", err)
+	}
+	if len(chatResp.Choices) == 0 {
+		return "", fmt.Errorf("llm response contains no choices")
+	}
+
+	content := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	if content == "" {
+		return "", fmt.Errorf("llm response content is empty")
+	}
+	return content, nil
 }
 
 func normalizeLLMRisk(level string) string {

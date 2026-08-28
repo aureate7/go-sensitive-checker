@@ -13,6 +13,8 @@ type HitEvidence struct {
 	NormalizedUsed bool   `json:"normalized_used"`
 	PinyinUsed     bool   `json:"pinyin_used"`
 	RiskLevel      string `json:"risk_level"`
+	LLMVerdict     string `json:"llm_verdict,omitempty"` // confirm/demote/review（逐命中复核后填充）
+	LLMReason      string `json:"llm_reason,omitempty"`
 }
 
 type wordAgg struct {

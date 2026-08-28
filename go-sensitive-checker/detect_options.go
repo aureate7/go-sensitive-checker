@@ -53,36 +53,40 @@ func (o DetectOptions) FillDefault(def DetectOptions) DetectOptions {
 }
 
 type DetectorConfig struct {
-	DefaultOptions       DetectOptions
-	EnableNormalize      bool
-	EnableFuzzy          bool
-	EnablePinyin         bool
-	EnableAutoPinyin     bool
-	EnablePinyinInitials bool
-	PinyinAliasPath      string
-	EnableLLMAssist      bool
-	LLMAPIBaseURL        string
-	LLMAPIKey            string
-	LLMModel             string
-	LLMTimeoutMS         int
-	LLMMaxTextRunes      int
+	DefaultOptions         DetectOptions
+	EnableNormalize        bool
+	EnableFuzzy            bool
+	EnablePinyin           bool
+	EnableAutoPinyin       bool
+	EnablePinyinInitials   bool
+	PinyinAliasPath        string
+	EnableLLMAssist        bool
+	LLMAPIBaseURL          string
+	LLMAPIKey              string
+	LLMModel               string
+	LLMTimeoutMS           int
+	LLMMaxTextRunes        int
+	EnableLLMHitReview     bool
+	LLMHitReviewDailyLimit int
 }
 
 func DefaultDetectorConfig(basePath string) DetectorConfig {
 	return DetectorConfig{
-		DefaultOptions:       DefaultDetectOptions(),
-		EnableNormalize:      envBool("SENSITIVE_ENABLE_NORMALIZE", true),
-		EnableFuzzy:          envBool("SENSITIVE_ENABLE_FUZZY", true),
-		EnablePinyin:         envBool("SENSITIVE_ENABLE_PINYIN", true),
-		EnableAutoPinyin:     envBool("SENSITIVE_ENABLE_AUTO_PINYIN", true),
-		EnablePinyinInitials: envBool("SENSITIVE_ENABLE_PINYIN_INITIALS", false),
-		PinyinAliasPath:      envStr("SENSITIVE_PINYIN_ALIAS_FILE", basePath+"/拼音混淆词/拼音映射.txt"),
-		EnableLLMAssist:      envBool("SENSITIVE_ENABLE_LLM_ASSIST", false),
-		LLMAPIBaseURL:        strings.TrimRight(envStr("SENSITIVE_LLM_API_BASE_URL", "https://api.deepseek.com"), "/"),
-		LLMAPIKey:            strings.TrimSpace(envStr("SENSITIVE_LLM_API_KEY", "")),
-		LLMModel:             strings.TrimSpace(envStr("SENSITIVE_LLM_MODEL", "deepseek-v4-flash")),
-		LLMTimeoutMS:         envInt("SENSITIVE_LLM_TIMEOUT_MS", 10000),
-		LLMMaxTextRunes:      envInt("SENSITIVE_LLM_MAX_TEXT_RUNES", 1200),
+		DefaultOptions:         DefaultDetectOptions(),
+		EnableNormalize:        envBool("SENSITIVE_ENABLE_NORMALIZE", true),
+		EnableFuzzy:            envBool("SENSITIVE_ENABLE_FUZZY", true),
+		EnablePinyin:           envBool("SENSITIVE_ENABLE_PINYIN", true),
+		EnableAutoPinyin:       envBool("SENSITIVE_ENABLE_AUTO_PINYIN", true),
+		EnablePinyinInitials:   envBool("SENSITIVE_ENABLE_PINYIN_INITIALS", false),
+		PinyinAliasPath:        envStr("SENSITIVE_PINYIN_ALIAS_FILE", basePath+"/拼音混淆词/拼音映射.txt"),
+		EnableLLMAssist:        envBool("SENSITIVE_ENABLE_LLM_ASSIST", false),
+		LLMAPIBaseURL:          strings.TrimRight(envStr("SENSITIVE_LLM_API_BASE_URL", "https://api.deepseek.com"), "/"),
+		LLMAPIKey:              strings.TrimSpace(envStr("SENSITIVE_LLM_API_KEY", "")),
+		LLMModel:               strings.TrimSpace(envStr("SENSITIVE_LLM_MODEL", "deepseek-v4-flash")),
+		LLMTimeoutMS:           envInt("SENSITIVE_LLM_TIMEOUT_MS", 10000),
+		LLMMaxTextRunes:        envInt("SENSITIVE_LLM_MAX_TEXT_RUNES", 1200),
+		EnableLLMHitReview:     envBool("SENSITIVE_ENABLE_LLM_HIT_REVIEW", false),
+		LLMHitReviewDailyLimit: envInt("SENSITIVE_LLM_HIT_REVIEW_DAILY_LIMIT", 1000),
 	}
 }
 

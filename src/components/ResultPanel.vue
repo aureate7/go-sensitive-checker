@@ -263,6 +263,10 @@
                         <div class="word-hit-detail-pop__line">
                           词库命中：{{ getSensitiveWordHint(cat, w) }}
                         </div>
+                        <div v-if="getHitLLMVerdict(cat, w)" class="word-hit-detail-pop__line">
+                          LLM 复核：{{ getHitLLMVerdict(cat, w).label }}
+                          <template v-if="getHitLLMVerdict(cat, w).reason">（{{ getHitLLMVerdict(cat, w).reason }}）</template>
+                        </div>
                       </div>
                     </template>
                     <el-tag
@@ -603,6 +607,19 @@ const riskLevelText = computed(() => {
 })
 
 const llmAssist = computed(() => props.result?.llm_assist || null)
+
+// 逐命中 LLM 复核结论映射：category \x00 原文词 -> {label, reason}
+const hitLLMVerdictMap = computed(() => {
+  const map = new Map()
+  const reviews = llmAssist.value?.hit_reviews || []
+  const labels = { confirm: '确认违规', demote: '疑似误报', review: '建议人工复核' }
+  for (const r of reviews) {
+    map.set(`${r.category}\u0000${r.word}`, { label: labels[r.verdict] || r.verdict, reason: r.reason || '' })
+  }
+  return map
+})
+
+const getHitLLMVerdict = (cat, w) => hitLLMVerdictMap.value.get(`${cat}\u0000${w.word}`) || null
 
 const llmAssistVisible = computed(() => {
   const enabledByOptions = !!props.result?.applied_options?.enable_llm_assist

@@ -66,6 +66,7 @@ type Detector struct {
 	fuzzyMatcher  *FuzzyMatcher
 	pinyinMatcher *PinyinMatcher
 	llmAssist     *llmAssistClient
+	hitReviewer   *hitReviewer
 	loadStatus    WordListStatus
 }
 
@@ -101,6 +102,9 @@ func NewDetectorWithConfig(basePath string, cfg DetectorConfig) *Detector {
 		fuzzyMatcher:   NewFuzzyMatcher(normalizer),
 		pinyinMatcher:  NewPinyinMatcher(normalizer, cfg.PinyinAliasPath, cfg.EnableAutoPinyin, cfg.EnablePinyinInitials),
 		llmAssist:      llmClient,
+	}
+	if cfg.EnableLLMHitReview {
+		d.hitReviewer = newHitReviewer(llmClient, cfg.LLMHitReviewDailyLimit, 20)
 	}
 	for cat := range CategoryDisplay {
 		d.sensitiveWords[cat] = make(map[string]struct{})
@@ -647,6 +651,26 @@ func (d *Detector) DetectWithContext(ctx context.Context, text string, categorie
 			}
 		}
 		resp.LLMAssist = llmReport
+	}
+
+	// 逐命中 LLM 语境复核：对低风险命中判 confirm/demote/review。
+	// 失败或配额耗尽时静默降级为纯规则结果，仅在报告中记录原因。
+	if d.hitReviewer != nil && len(resp.HitEvidences) > 0 {
+		reviews, err := d.hitReviewer.ReviewHits(ctx, text, resp.HitEvidences)
+		if err != nil {
+			if resp.LLMAssist == nil {
+				resp.LLMAssist = &LLMAssistResult{Enabled: true, Model: strings.TrimSpace(d.config.LLMModel)}
+			}
+			resp.LLMAssist.Error = "hit review: " + err.Error()
+		} else if resp.LLMAssist != nil {
+			resp.LLMAssist.HitReviews = reviews
+		}
+		for _, r := range reviews {
+			if r.Index >= 0 && r.Index < len(resp.HitEvidences) {
+				resp.HitEvidences[r.Index].LLMVerdict = r.Verdict
+				resp.HitEvidences[r.Index].LLMReason = r.Reason
+			}
+		}
 	}
 
 	return resp
