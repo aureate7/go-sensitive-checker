@@ -122,6 +122,45 @@ AC 自动机 + 归一化 + 模糊/拼音别名索引
 
 ## 快速开始
 
+### v2.3 精准检测增强
+
+v2.3 增加离线变体生成、拉丁词边界保护和版本化上下文规则。变体不会写回原始词库，生成后分别装载到模糊或拼音别名索引：
+
+```bash
+cd go-sensitive-checker
+go run . -gen-variants
+go run . -eval evalset/samples.jsonl
+```
+
+默认生成 `temp/generated_variants.json`，也可以将输出路径作为第二个参数传入。服务通过 `SENSITIVE_VARIANT_ALIAS_FILE` 指定装载位置。建议生成后先运行评测，确认 F1 不回退，再随词库快照发布。
+
+策略可以配置轻量上下文规则；负分用于新闻、引用等低风险语境，正分用于购买、价格等高风险意图：
+
+```json
+{
+  "context_rules": [
+    {
+      "id": "news-reporting",
+      "name": "新闻引用降级",
+      "phrases": ["新闻报道", "据指控"],
+      "categories": ["violent_high"],
+      "window": 20,
+      "score_delta": -20
+    },
+    {
+      "id": "purchase-intent",
+      "name": "购买意图升级",
+      "phrases": ["购买", "价格"],
+      "categories": ["violent_chemical"],
+      "window": 20,
+      "score_delta": 35
+    }
+  ]
+}
+```
+
+规则随 policy 一起保存和递增版本，命中结果通过 `context_rule_hits` 返回，并纳入 `risk_score` 与推荐动作计算。
+
 ### 环境要求
 
 - Node.js：`^20.19.0 || >=22.12.0`

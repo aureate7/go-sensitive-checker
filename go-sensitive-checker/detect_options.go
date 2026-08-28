@@ -60,6 +60,7 @@ type DetectorConfig struct {
 	EnableAutoPinyin       bool
 	EnablePinyinInitials   bool
 	PinyinAliasPath        string
+	VariantAliasPath       string
 	EnableLLMAssist        bool
 	LLMAPIBaseURL          string
 	LLMAPIKey              string
@@ -79,6 +80,7 @@ func DefaultDetectorConfig(basePath string) DetectorConfig {
 		EnableAutoPinyin:       envBool("SENSITIVE_ENABLE_AUTO_PINYIN", true),
 		EnablePinyinInitials:   envBool("SENSITIVE_ENABLE_PINYIN_INITIALS", false),
 		PinyinAliasPath:        envStr("SENSITIVE_PINYIN_ALIAS_FILE", basePath+"/拼音混淆词/拼音映射.txt"),
+		VariantAliasPath:       envStr("SENSITIVE_VARIANT_ALIAS_FILE", basePath+"/generated_variants.json"),
 		EnableLLMAssist:        envBool("SENSITIVE_ENABLE_LLM_ASSIST", false),
 		LLMAPIBaseURL:          strings.TrimRight(envStr("SENSITIVE_LLM_API_BASE_URL", "https://api.deepseek.com"), "/"),
 		LLMAPIKey:              strings.TrimSpace(envStr("SENSITIVE_LLM_API_KEY", "")),

@@ -114,6 +114,7 @@ func NewDetectorWithConfig(basePath string, cfg DetectorConfig) *Detector {
 	d.finalizeLoadStatus()
 	d.buildAutomata()
 	d.buildEnhancedIndexes()
+	d.loadGeneratedVariants(cfg.VariantAliasPath)
 	return d
 }
 
@@ -309,6 +310,7 @@ type DetectResponse struct {
 	PolicyID             string                    `json:"policy_id,omitempty"`
 	PolicyVersion        int                       `json:"policy_version,omitempty"`
 	PolicyRuleHits       []CompositeRuleHit        `json:"policy_rule_hits,omitempty"`
+	ContextRuleHits      []ContextRuleHit          `json:"context_rule_hits,omitempty"`
 	RiskScore            int                       `json:"risk_score"`
 	RecommendedAction    string                    `json:"recommended_action"`
 	ScoreBreakdown       map[string]int            `json:"score_breakdown,omitempty"`
@@ -422,6 +424,12 @@ func (d *Detector) DetectWithContext(ctx context.Context, text string, categorie
 			}
 			matchedText := safeSliceRunes(text, start, end)
 			if strings.TrimSpace(matchedText) == "" {
+				return
+			}
+			// Pure Latin/digit terms must match a token boundary. This prevents a
+			// word such as "sex" from firing inside an unrelated word such as
+			// "Sussex", while retaining rune-level matching for Chinese text.
+			if !hasLatinWordBoundary(text, word, start, end) {
 				return
 			}
 

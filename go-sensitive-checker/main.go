@@ -392,6 +392,11 @@ func subtleTokenMismatch(header, expected string) bool {
 }
 
 func main() {
+	// Offline variant mining: go run . -gen-variants [output.json]
+	if len(os.Args) > 1 && os.Args[1] == "-gen-variants" {
+		runGenerateVariants(os.Args[2:])
+		return
+	}
 	// 离线评测模式：go run . -eval evalset/samples.jsonl
 	if len(os.Args) > 1 && os.Args[1] == "-eval" {
 		runEval(os.Args[2:])

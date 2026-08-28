@@ -32,6 +32,7 @@ type DetectionPolicy struct {
 	Enabled         bool            `json:"enabled"`
 	Whitelist       []string        `json:"whitelist,omitempty"`
 	Rules           []CompositeRule `json:"rules,omitempty"`
+	ContextRules    []ContextRule   `json:"context_rules,omitempty"`
 	ReviewThreshold int             `json:"review_threshold"`
 	BlockThreshold  int             `json:"block_threshold"`
 	CreatedAt       time.Time       `json:"created_at"`
@@ -53,6 +54,28 @@ type CompositeRuleHit struct {
 	Terms     []string `json:"terms"`
 	RiskLevel string   `json:"risk_level"`
 	Action    string   `json:"action"`
+}
+
+// ContextRule adjusts the policy score when a hit appears near configured
+// phrases. Negative deltas model benign/reporting context; positive deltas
+// model dangerous intent or co-occurrence. Rules are versioned with policies.
+type ContextRule struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Phrases    []string `json:"phrases"`
+	Words      []string `json:"words,omitempty"`
+	Categories []string `json:"categories,omitempty"`
+	Window     int      `json:"window"`
+	ScoreDelta int      `json:"score_delta"`
+}
+
+type ContextRuleHit struct {
+	RuleID     string `json:"rule_id"`
+	RuleName   string `json:"rule_name"`
+	Phrase     string `json:"phrase"`
+	Word       string `json:"word"`
+	Category   string `json:"category"`
+	ScoreDelta int    `json:"score_delta"`
 }
 
 type policyStore struct {
@@ -247,6 +270,32 @@ func validatePolicy(policy DetectionPolicy) error {
 			}
 		}
 	}
+	contextIDs := map[string]struct{}{}
+	for _, rule := range policy.ContextRules {
+		if strings.TrimSpace(rule.ID) == "" || strings.TrimSpace(rule.Name) == "" || len(rule.Phrases) == 0 {
+			return fmt.Errorf("invalid context rule")
+		}
+		if _, exists := contextIDs[rule.ID]; exists {
+			return fmt.Errorf("duplicate context rule id %s", rule.ID)
+		}
+		contextIDs[rule.ID] = struct{}{}
+		if rule.Window < 0 || rule.Window > 500 {
+			return fmt.Errorf("invalid context rule window")
+		}
+		if rule.ScoreDelta < -100 || rule.ScoreDelta > 100 || rule.ScoreDelta == 0 {
+			return fmt.Errorf("invalid context rule score_delta")
+		}
+		for _, phrase := range rule.Phrases {
+			if strings.TrimSpace(phrase) == "" {
+				return fmt.Errorf("empty context phrase")
+			}
+		}
+		for _, category := range rule.Categories {
+			if _, ok := CategoryDisplay[category]; !ok {
+				return fmt.Errorf("unknown context category %s", category)
+			}
+		}
+	}
 	return nil
 }
 
@@ -256,6 +305,7 @@ func detectWithPolicy(ctx context.Context, detector *Detector, text string, poli
 	response.PolicyID = policy.ID
 	response.PolicyVersion = policy.Version
 	response.PolicyRuleHits = matchCompositeRules(masked, policy.Rules)
+	response.ContextRuleHits = matchContextRules(masked, response.HitEvidences, policy.ContextRules)
 	for _, hit := range response.PolicyRuleHits {
 		response.HasSensitive = true
 		if riskRank(hit.RiskLevel) > riskRank(response.RiskLevel) {
@@ -275,12 +325,18 @@ func applyRiskScore(response *DetectResponse, policy DetectionPolicy) {
 	for _, hit := range response.PolicyRuleHits {
 		breakdown["composite_rules"] += map[string]int{"high": 35, "medium": 25, "low": 15}[hit.RiskLevel]
 	}
+	for _, hit := range response.ContextRuleHits {
+		breakdown["context_rules"] += hit.ScoreDelta
+	}
 	score := 0
 	for _, value := range breakdown {
 		score += value
 	}
 	if score > 100 {
 		score = 100
+	}
+	if score < 0 {
+		score = 0
 	}
 	reviewThreshold, blockThreshold := policy.ReviewThreshold, policy.BlockThreshold
 	if reviewThreshold <= 0 {
@@ -297,6 +353,55 @@ func applyRiskScore(response *DetectResponse, policy DetectionPolicy) {
 	} else if score > 0 {
 		response.RecommendedAction = "mask"
 	}
+}
+
+func matchContextRules(text string, evidences []HitEvidence, rules []ContextRule) []ContextRuleHit {
+	runes := []rune(text)
+	hits := make([]ContextRuleHit, 0)
+	seen := map[string]struct{}{}
+	contains := func(items []string, value string) bool {
+		if len(items) == 0 {
+			return true
+		}
+		for _, item := range items {
+			if item == value {
+				return true
+			}
+		}
+		return false
+	}
+	for _, evidence := range evidences {
+		for _, rule := range rules {
+			if !contains(rule.Words, evidence.Word) || !contains(rule.Categories, evidence.Category) {
+				continue
+			}
+			window := rule.Window
+			if window <= 0 {
+				window = 20
+			}
+			start, end := evidence.Start-window, evidence.End+window
+			if start < 0 {
+				start = 0
+			}
+			if end > len(runes) {
+				end = len(runes)
+			}
+			contextText := string(runes[start:end])
+			for _, phrase := range rule.Phrases {
+				phrase = strings.TrimSpace(phrase)
+				if phrase == "" || !strings.Contains(contextText, phrase) {
+					continue
+				}
+				key := rule.ID + "\x00" + evidence.Category + "\x00" + evidence.Word + "\x00" + phrase
+				if _, exists := seen[key]; exists {
+					continue
+				}
+				seen[key] = struct{}{}
+				hits = append(hits, ContextRuleHit{rule.ID, rule.Name, phrase, evidence.Word, evidence.Category, rule.ScoreDelta})
+			}
+		}
+	}
+	return hits
 }
 
 func maskWhitelist(text string, whitelist []string) string {
