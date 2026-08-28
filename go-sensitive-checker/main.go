@@ -60,6 +60,7 @@ type detectorService struct {
 	detectTotal  atomic.Uint64
 	detectErrors atomic.Uint64
 	busyRejected atomic.Uint64
+	reviews      *reviewStore // 共享复核存储（registerReviewRoutes 注入）
 	reloadTotal  atomic.Uint64
 }
 
@@ -250,6 +251,14 @@ func newRouter(service *detectorService, cfg serverConfig) *gin.Engine {
 		response := detector.DetectWithContext(c.Request.Context(), req.Text, req.Categories, req.Options)
 		if cfg.Webhook != nil {
 			cfg.Webhook.Notify("high_risk_hit", "检测到高风险内容", describeRiskSummary(&response), response.RiskLevel)
+		}
+		// LLM 判为疑似误报的命中自动回流为白名单候选，等待人工确认。
+		if service.reviews != nil && response.LLMAssist != nil && len(response.LLMAssist.HitReviews) > 0 {
+			if added, err := service.reviews.recordDemoteCandidates(response.LLMAssist.HitReviews); err != nil {
+				log.Printf("record demote candidates failed: %v", err)
+			} else if added > 0 {
+				log.Printf("recorded %d demote whitelist candidate(s)", added)
+			}
 		}
 		c.JSON(http.StatusOK, response)
 	})

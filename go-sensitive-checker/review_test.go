@@ -279,3 +279,68 @@ func TestReviewStoreStats(t *testing.T) {
 		t.Fatalf("expected 1 pending candidate, got %d", stats.CandidatesPending)
 	}
 }
+
+func TestRecordDemoteCandidatesDedupes(t *testing.T) {
+	store, err := newReviewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviews := []HitLLMReview{
+		{Word: "扫描", Category: "violent_low", Verdict: hitVerdictDemote},
+		{Word: "扫描", Category: "violent_low", Verdict: hitVerdictDemote},  // 同批次去重
+		{Word: "笨蛋", Category: "abusive_low", Verdict: hitVerdictConfirm}, // 非 demote 忽略
+		{Word: "", Category: "abusive_low", Verdict: hitVerdictDemote},    // 空词忽略
+	}
+	added, err := store.recordDemoteCandidates(reviews)
+	if err != nil || added != 1 {
+		t.Fatalf("added = %d err = %v, want 1", added, err)
+	}
+	// 第二次同词不再重复
+	if added, _ := store.recordDemoteCandidates(reviews); added != 0 {
+		t.Fatalf("duplicate demote should be skipped, added %d", added)
+	}
+	candidates := store.listCandidates()
+	if len(candidates) != 1 || candidates[0].Type != "whitelist" || candidates[0].Value != "扫描" {
+		t.Fatalf("unexpected candidates: %+v", candidates)
+	}
+}
+
+// 验证 demote 过滤在指标层面的效果：剔除疑似误报后 precision 提升。
+func TestDemoteFilteringImprovesPrecision(t *testing.T) {
+	samples := []EvalSample{
+		{ID: "s1", Text: "新闻转述扫描", Hits: nil}, // 扫描 是误报，不该命中
+	}
+	responses := []DetectResponse{{
+		HitEvidences: []HitEvidence{
+			{Word: "扫描", Category: "violent_low", LLMVerdict: hitVerdictDemote},
+		},
+	}}
+	// 过滤前：demote 证据计入 → FP
+	before, err := ComputeMetrics(samples, responses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before[0].FalsePos != 1 {
+		t.Fatalf("expected FP before filtering, got %+v", before[0])
+	}
+	// 过滤后：demote 证据被剔除 → 零命中
+	filtered := make([]DetectResponse, 0, len(responses))
+	for _, resp := range responses {
+		var kept []HitEvidence
+		for _, ev := range resp.HitEvidences {
+			if ev.LLMVerdict != hitVerdictDemote {
+				kept = append(kept, ev)
+			}
+		}
+		resp.HitEvidences = kept
+		filtered = append(filtered, resp)
+	}
+	after, err := ComputeMetrics(samples, filtered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 全部计数归零时报告为空，即 demote 过滤后无误报
+	if len(after) > 0 && (after[0].FalsePos != 0 || after[0].Precision != 1) {
+		t.Fatalf("precision should be 1 after demote filtering, got %+v", after[0])
+	}
+}

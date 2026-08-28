@@ -183,6 +183,47 @@ func (s *reviewStore) getCandidate(id string) (FeedbackCandidate, bool) {
 	return c, ok
 }
 
+// recordDemoteCandidates 把 LLM 判为疑似误报（demote）的命中回流为白名单候选，
+// 供人工在复核工作台一键确认。同一 value+type 的 pending 候选已存在时跳过去重。
+// 返回新增条数。
+func (s *reviewStore) recordDemoteCandidates(reviews []HitLLMReview) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing := make(map[string]struct{}, len(s.candidates))
+	for _, c := range s.candidates {
+		if c.Status == "pending" {
+			existing[c.Type+"\x00"+c.Value] = struct{}{}
+		}
+	}
+	added := 0
+	now := time.Now().UTC()
+	for _, r := range reviews {
+		if r.Verdict != hitVerdictDemote || strings.TrimSpace(r.Word) == "" {
+			continue
+		}
+		key := "whitelist\x00" + r.Word
+		if _, dup := existing[key]; dup {
+			continue
+		}
+		existing[key] = struct{}{}
+		candidate := FeedbackCandidate{
+			ID:        taskID(),
+			ReviewID:  "llm-hit-review",
+			Type:      "whitelist",
+			Value:     r.Word,
+			Category:  r.Category,
+			Status:    "pending",
+			CreatedAt: now,
+		}
+		s.candidates[candidate.ID] = candidate
+		added++
+	}
+	if added == 0 {
+		return 0, nil
+	}
+	return added, s.saveLocked()
+}
+
 // setCandidateStatus 更新候选状态（applied / dismissed），仅允许变更一次。
 func (s *reviewStore) setCandidateStatus(id, status string) (FeedbackCandidate, error) {
 	if status != "applied" && status != "dismissed" {
@@ -287,6 +328,7 @@ func registerReviewRoutes(admin *gin.RouterGroup, service *detectorService, poli
 	if err != nil {
 		return err
 	}
+	service.reviews = store // 供检测处理器把 demote 命中回流为候选
 	// 复核积压监控：pending 超过阈值时推送 webhook（每 5 分钟检查一次）。
 	if backlogThreshold := envInt("SENSITIVE_WEBHOOK_BACKLOG_THRESHOLD", 20); webhook != nil && backlogThreshold > 0 {
 		go func() {
