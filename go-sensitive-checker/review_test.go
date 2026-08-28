@@ -238,3 +238,44 @@ func TestReviewStoreCandidateStatusGuards(t *testing.T) {
 		t.Fatalf("missing candidate should return ErrNotExist, got %v", err)
 	}
 }
+
+func TestReviewStoreStats(t *testing.T) {
+	dir := t.TempDir()
+	store, err := newReviewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 三个任务：一个 pending、一个 resolved-误报、一个 resolved-确认违规
+	_, _ = store.create("a", DetectResponse{})
+	t2, _ := store.create("b", DetectResponse{})
+	t3, _ := store.create("c", DetectResponse{})
+	if _, err := store.claim(t2.ID, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.claim(t3.ID, "bob"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.resolve(t2.ID, "alice", "false_positive", "", "whitelist", "词", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.resolve(t3.ID, "bob", "confirmed_violation", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := store.stats()
+	if stats.Pending != 1 || stats.Resolved != 2 || stats.Claimed != 0 {
+		t.Fatalf("counts wrong: %+v", stats)
+	}
+	if stats.FalsePositiveRate != 0.5 {
+		t.Fatalf("fp rate = %f, want 0.5", stats.FalsePositiveRate)
+	}
+	if len(stats.Reviewers) != 2 {
+		t.Fatalf("expected 2 reviewers, got %+v", stats.Reviewers)
+	}
+	if stats.Reviewers[0].Reviewer != "alice" && stats.Reviewers[1].Reviewer != "alice" {
+		t.Fatal("alice missing from reviewers")
+	}
+	if stats.CandidatesPending != 1 {
+		t.Fatalf("expected 1 pending candidate, got %d", stats.CandidatesPending)
+	}
+}

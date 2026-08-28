@@ -406,6 +406,18 @@ curl -X POST http://localhost:8008/api/admin/wordlist/reload \
 
 管理控制台（`/admin`）提供白名单可视化卡片：查看全部与分类别豁免词条、多选类别添加、一键移除，变更即时生效并记入审计日志。
 
+### 10) 复核指标看板
+
+`GET /api/platform/review-stats` 聚合返回：待处理/处理中/已结案数量、误报占已结案比例、候选待处理/已应用数，以及按审核员的结案量、结论分布与平均处理时长。前端复核工作台（`/reviews`）顶部直接展示。
+
+### 11) Webhook 通知
+
+配置 `SENSITIVE_WEBHOOK_URL` 后启用（未配置则完全关闭）：
+
+- `high_risk_hit`：检测结果风险达到 `SENSITIVE_WEBHOOK_MIN_RISK`（默认 `high`）时推送；内容只含统计摘要（风险级别、命中分布、类别），**不包含检测原文**。
+- `review_backlog`：复核队列 pending 达到 `SENSITIVE_WEBHOOK_BACKLOG_THRESHOLD`（默认 20）时告警，回落后允许再次告警。
+- `SENSITIVE_WEBHOOK_MAX_PER_DAY`（默认 50）限制每日推送上限，防止通知风暴。
+
 仓库自带示例词库与白名单样例（`go-sensitive-checker/temp/`），克隆后即可直接启动验证；生产环境请替换为正式词库。
 
 ### 9) 评测集

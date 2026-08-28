@@ -878,7 +878,7 @@ func evaluatePolicy(ctx context.Context, detector *Detector, policy DetectionPol
 	return report, nil
 }
 
-func registerPlatformRoutes(r *gin.Engine, service *detectorService, token, dataPath string, maxLines, workers, maxConcurrentTasks int, retention time.Duration, maxStorageBytes int64) error {
+func registerPlatformRoutes(r *gin.Engine, service *detectorService, token, dataPath string, maxLines, workers, maxConcurrentTasks int, retention time.Duration, maxStorageBytes int64, webhook *webhookNotifier) error {
 	policies, err := newPolicyStore(dataPath)
 	if err != nil {
 		return err
@@ -893,7 +893,7 @@ func registerPlatformRoutes(r *gin.Engine, service *detectorService, token, data
 	}
 	admin := r.Group("/api/platform")
 	admin.Use(adminTokenMiddleware(token))
-	if err := registerReviewRoutes(admin, service, policies, dataPath); err != nil {
+	if err := registerReviewRoutes(admin, service, policies, dataPath, webhook); err != nil {
 		return err
 	}
 	admin.GET("/policies", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"items": policies.list(false)}) })

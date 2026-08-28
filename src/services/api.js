@@ -41,6 +41,7 @@ export const claimReviewTask = async (token,id,reviewer)=>(await api.post(`/plat
 export const releaseReviewTask = async (token,id,reviewer)=>(await api.post(`/platform/reviews/${id}/release`,{reviewer},{headers:adminHeaders(token)})).data
 export const resolveReviewTask = async (token,id,payload)=>(await api.post(`/platform/reviews/${id}/resolve`,payload,{headers:adminHeaders(token)})).data
 export const fetchFeedbackCandidates = async (token)=>(await api.get('/platform/feedback-candidates',{headers:adminHeaders(token)})).data
+export const fetchReviewStats = async (token)=>(await api.get('/platform/review-stats',{headers:adminHeaders(token)})).data
 export const applyFeedbackCandidate = async (token,id)=>(await api.post(`/platform/feedback-candidates/${encodeURIComponent(id)}/apply`,{},{headers:adminHeaders(token)})).data
 export const dismissFeedbackCandidate = async (token,id)=>(await api.post(`/platform/feedback-candidates/${encodeURIComponent(id)}/dismiss`,{},{headers:adminHeaders(token)})).data
 export const downloadBatchResults = async (token, id, format = 'csv') => (await api.get(`/platform/tasks/${encodeURIComponent(id)}/results`, { params: { format }, headers: adminHeaders(token), responseType: 'blob' })).data

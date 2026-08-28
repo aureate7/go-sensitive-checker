@@ -51,6 +51,7 @@ type serverConfig struct {
 	MaxBatchTasks   int
 	TaskRetention   time.Duration
 	TaskMaxStorage  int64
+	Webhook         *webhookNotifier
 }
 
 type detectorService struct {
@@ -107,6 +108,7 @@ func loadServerConfig() serverConfig {
 		MaxBatchTasks:   envInt("SENSITIVE_MAX_CONCURRENT_TASKS", 2),
 		TaskRetention:   time.Duration(envInt("SENSITIVE_TASK_RETENTION_HOURS", 168)) * time.Hour,
 		TaskMaxStorage:  int64(envInt("SENSITIVE_TASK_MAX_STORAGE_BYTES", 10<<30)),
+		Webhook:         newWebhookNotifier(),
 	}
 }
 
@@ -245,7 +247,11 @@ func newRouter(service *detectorService, cfg serverConfig) *gin.Engine {
 			writeAPIError(c, http.StatusTooManyRequests, "SERVER_BUSY", "服务器繁忙，请稍后重试", nil)
 			return
 		}
-		c.JSON(http.StatusOK, detector.DetectWithContext(c.Request.Context(), req.Text, req.Categories, req.Options))
+		response := detector.DetectWithContext(c.Request.Context(), req.Text, req.Categories, req.Options)
+		if cfg.Webhook != nil {
+			cfg.Webhook.Notify("high_risk_hit", "检测到高风险内容", describeRiskSummary(&response), response.RiskLevel)
+		}
+		c.JSON(http.StatusOK, response)
 	})
 
 	r.GET("/api/statistics", func(c *gin.Context) { c.JSON(http.StatusOK, service.detector().Statistics()) })
@@ -276,7 +282,7 @@ func newRouter(service *detectorService, cfg serverConfig) *gin.Engine {
 	if cfg.AdminToken != "" {
 		registerAdminRoutes(r, newAdminManager(service, cfg.DataPath), cfg.AdminToken)
 	}
-	if err := registerPlatformRoutes(r, service, cfg.AdminToken, cfg.DataPath, cfg.MaxBatchLines, cfg.BatchWorkers, cfg.MaxBatchTasks, cfg.TaskRetention, cfg.TaskMaxStorage); err != nil {
+	if err := registerPlatformRoutes(r, service, cfg.AdminToken, cfg.DataPath, cfg.MaxBatchLines, cfg.BatchWorkers, cfg.MaxBatchTasks, cfg.TaskRetention, cfg.TaskMaxStorage, cfg.Webhook); err != nil {
 		log.Printf("platform features disabled: %v", err)
 	}
 	r.GET("/health/live", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "alive"}) })

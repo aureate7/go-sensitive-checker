@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -201,10 +202,108 @@ func (s *reviewStore) setCandidateStatus(id, status string) (FeedbackCandidate, 
 	return c, s.saveLocked()
 }
 
-func registerReviewRoutes(admin *gin.RouterGroup, service *detectorService, policies *policyStore, dataPath string) error {
+// ReviewerStats 是单个审核员的复核指标。
+type ReviewerStats struct {
+	Reviewer      string  `json:"reviewer"`
+	Resolved      int     `json:"resolved"`
+	ConfirmedBad  int     `json:"confirmed_violation"`
+	FalsePositive int     `json:"false_positive"`
+	FalseNegative int     `json:"false_negative"`
+	AvgSeconds    float64 `json:"avg_handle_seconds"`
+}
+
+// ReviewStatsResponse 是复核指标看板的聚合结果。
+type ReviewStatsResponse struct {
+	Pending           int             `json:"pending"`
+	Claimed           int             `json:"claimed"`
+	Resolved          int             `json:"resolved"`
+	CandidatesPending int             `json:"candidates_pending"`
+	CandidatesApplied int             `json:"candidates_applied"`
+	FalsePositiveRate float64         `json:"false_positive_rate"` // 误报占已结案比例
+	Reviewers         []ReviewerStats `json:"reviewers"`
+}
+
+// stats 聚合看板指标。仅统计已结案任务的耗时与结论分布。
+func (s *reviewStore) stats() ReviewStatsResponse {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := ReviewStatsResponse{Reviewers: []ReviewerStats{}}
+	byReviewer := map[string]*ReviewerStats{}
+	var resolvedFP int
+	for _, task := range s.reviews {
+		switch task.Status {
+		case "pending":
+			out.Pending++
+		case "claimed":
+			out.Claimed++
+		case "resolved":
+			out.Resolved++
+			if task.Conclusion == "false_positive" {
+				resolvedFP++
+			}
+			if task.ClaimedBy == "" {
+				continue
+			}
+			rs := byReviewer[task.ClaimedBy]
+			if rs == nil {
+				rs = &ReviewerStats{Reviewer: task.ClaimedBy}
+				byReviewer[task.ClaimedBy] = rs
+			}
+			rs.Resolved++
+			rs.AvgSeconds += task.UpdatedAt.Sub(task.CreatedAt).Seconds()
+			switch task.Conclusion {
+			case "confirmed_violation":
+				rs.ConfirmedBad++
+			case "false_positive":
+				rs.FalsePositive++
+			case "false_negative":
+				rs.FalseNegative++
+			}
+		}
+	}
+	for _, rs := range byReviewer {
+		if rs.Resolved > 0 {
+			rs.AvgSeconds = rs.AvgSeconds / float64(rs.Resolved)
+		}
+		out.Reviewers = append(out.Reviewers, *rs)
+	}
+	sort.Slice(out.Reviewers, func(i, j int) bool { return out.Reviewers[i].Resolved > out.Reviewers[j].Resolved })
+	if out.Resolved > 0 {
+		out.FalsePositiveRate = float64(resolvedFP) / float64(out.Resolved)
+	}
+	for _, c := range s.candidates {
+		switch c.Status {
+		case "pending":
+			out.CandidatesPending++
+		case "applied":
+			out.CandidatesApplied++
+		}
+	}
+	return out
+}
+
+func registerReviewRoutes(admin *gin.RouterGroup, service *detectorService, policies *policyStore, dataPath string, webhook *webhookNotifier) error {
 	store, err := newReviewStore(dataPath)
 	if err != nil {
 		return err
+	}
+	// 复核积压监控：pending 超过阈值时推送 webhook（每 5 分钟检查一次）。
+	if backlogThreshold := envInt("SENSITIVE_WEBHOOK_BACKLOG_THRESHOLD", 20); webhook != nil && backlogThreshold > 0 {
+		go func() {
+			notified := false
+			for range time.Tick(5 * time.Minute) {
+				stats := store.stats()
+				if stats.Pending >= backlogThreshold {
+					if !notified {
+						webhook.Notify("review_backlog", "复核队列积压",
+							"待处理复核任务已达到 "+itoaInt(stats.Pending)+" 条，请及时处理", "high")
+						notified = true
+					}
+				} else {
+					notified = false // 回落后允许再次告警
+				}
+			}
+		}()
 	}
 	admin.POST("/reviews", func(c *gin.Context) {
 		var req struct {
@@ -262,6 +361,7 @@ func registerReviewRoutes(admin *gin.RouterGroup, service *detectorService, poli
 		reviewMutationResponse(c, task, err)
 	})
 	admin.GET("/feedback-candidates", func(c *gin.Context) { c.JSON(200, gin.H{"items": store.listCandidates()}) })
+	admin.GET("/review-stats", func(c *gin.Context) { c.JSON(200, store.stats()) })
 
 	// 把复核结案产生的候选真正落地：whitelist 类型写入 白名单.txt 并热重载。
 	admin.POST("/feedback-candidates/:id/apply", func(c *gin.Context) {
@@ -338,6 +438,10 @@ func registerReviewRoutes(admin *gin.RouterGroup, service *detectorService, poli
 	})
 	return nil
 }
+
+// itoaInt 供通知文案使用。
+func itoaInt(i int) string { return strconv.Itoa(i) }
+
 func reviewMutationResponse(c *gin.Context, task ReviewTask, err error) {
 	if errors.Is(err, os.ErrNotExist) {
 		writeAPIError(c, 404, "REVIEW_NOT_FOUND", "复核任务不存在", nil)
